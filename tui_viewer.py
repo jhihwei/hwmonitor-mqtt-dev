@@ -75,6 +75,13 @@ class HostInfoFooter(Static):
         except Exception:
             return 0.0
 
+    def get_host_ram(self) -> float:
+        """Get host RAM usage percentage."""
+        try:
+            return psutil.virtual_memory().percent
+        except Exception:
+            return 0.0
+
     def on_mount(self) -> None:
         """Update footer periodically."""
         self.set_interval(1, self.update_display)
@@ -83,6 +90,7 @@ class HostInfoFooter(Static):
     def update_display(self) -> None:
         """Update footer content."""
         cpu = self.get_host_cpu()
+        ram = self.get_host_ram()
         temp = self.get_host_temp()
 
         # Color code based on CPU usage
@@ -92,6 +100,14 @@ class HostInfoFooter(Static):
             cpu_color = "yellow"
         else:
             cpu_color = "green"
+
+        # Color code based on RAM usage
+        if ram >= 80:
+            ram_color = "red"
+        elif ram >= 60:
+            ram_color = "yellow"
+        else:
+            ram_color = "green"
 
         # Color code based on temperature
         temp_val = temp.replace("°C", "").strip()
@@ -106,7 +122,11 @@ class HostInfoFooter(Static):
         except ValueError:
             temp_color = "dim"
 
-        content = f"[bold]{self.hostname}[/bold] CPU [{cpu_color}]{cpu:4.1f}%[/{cpu_color}] [{temp_color}]{temp}[/{temp_color}]"
+        content = (
+            f"CPU [{cpu_color}]{cpu:4.1f}%[/{cpu_color}] "
+            f"RAM [{ram_color}]{ram:4.1f}%[/{ram_color}] "
+            f"[{temp_color}]{temp}[/{temp_color}]"
+        )
         self.update(content)
 
 class DeviceDisplay(Static):
@@ -121,6 +141,7 @@ class DeviceDisplay(Static):
         self.title_label = Label(f"[bold white on blue] {self.host_id} [/bold white on blue]")
         self.stale_label = Label("")
         self.metrics_label = Label("...")
+        self._stale = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="title-row"):
@@ -192,6 +213,7 @@ class DeviceDisplay(Static):
         )
 
         self.metrics_label.update(metrics_text)
+        self._set_stale(False)
 
     def _get_usage_color(self, percent: float) -> str:
         if percent >= 90:
@@ -219,11 +241,23 @@ class DeviceDisplay(Static):
         except (ValueError, AttributeError):
             return "dim"
 
-    def check_staleness(self, now: float):
-        if now - self.last_update > 15:
+    def _set_stale(self, value: bool) -> None:
+        """Toggle stale visual state."""
+        if self._stale == value:
+            return
+        self._stale = value
+        if value:
+            self.add_class("stale")
             self.stale_label.update("[bold yellow on black]⚠[/bold yellow on black]")
         else:
+            self.remove_class("stale")
             self.stale_label.update("")
+
+    def check_staleness(self, now: float):
+        if now - self.last_update > 10:
+            self._set_stale(True)
+        else:
+            self._set_stale(False)
 
 
 class MonitorApp(App):
@@ -255,6 +289,15 @@ class MonitorApp(App):
 
     DeviceDisplay Label {
         text-style: bold;
+    }
+
+    DeviceDisplay.stale {
+        background: #202020;
+        color: #808080;
+    }
+
+    DeviceDisplay.stale Label {
+        color: #808080;
     }
 
     .title-row {
