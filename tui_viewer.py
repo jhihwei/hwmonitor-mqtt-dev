@@ -253,10 +253,10 @@ class HostInfoFooter(Static):
             gpu_temp_color = "dim"
 
         # Compact layout: CPU/GPU on same level, minimal spacing
-        if gpu > 0 or gpu_temp != "N/A":
+        if gpu_temp != "N/A":
             content = (
                 f"C[{cpu_color}]{cpu:4.1f}%[/{cpu_color}][{temp_color}]{temp:>4}[/{temp_color}] "
-                f"G[{gpu_color}]{gpu:4.1f}%[/{gpu_color}][{gpu_temp_color}]{gpu_temp:>4}[/{gpu_temp_color}] "
+                f"G[{gpu_temp_color}]{gpu_temp:>4}[/{gpu_temp_color}] "
                 f"R[{ram_color}]{ram:4.1f}%[/{ram_color}]"
             )
         else:
@@ -348,16 +348,14 @@ class DeviceDisplay(Static):
         # Row budget: ~12 rows per device (43 rows - 2 header/footer = 41 / 3 ≈ 13)
 
         # Build CPU/GPU line (compact if GPU exists)
-        if gpu_percent is not None or gpu_temp is not None:
-            gpu_color = self._get_usage_color(gpu_percent) if gpu_percent is not None else "dim"
-            gpu_temp_color = self._get_temp_color(gpu_temp) if gpu_temp else "dim"
-            gpu_pct_str = f"{gpu_percent:5.1f}%" if gpu_percent is not None else "  N/A"
-            gpu_tmp_str = f"{gpu_temp:>5}" if gpu_temp else "  N/A"
+        if gpu_temp is not None:
+            gpu_temp_color = self._get_temp_color(gpu_temp)
+            gpu_tmp_str = f"{gpu_temp:>5}"
 
             metrics_text = (
-                f"[bold cyan]CPU[/bold cyan] [{cpu_color}]{cpu_percent:5.1f}%[/{cpu_color}] "
+                f"[bold cyan]CPU[/bold cyan][{cpu_color}]{cpu_percent:5.1f}%[/{cpu_color}]"
                 f"[{cpu_temp_color}]{cpu_temp:>5}[/{cpu_temp_color}] "
-                f"[bold yellow]GPU[/bold yellow] [{gpu_color}]{gpu_pct_str}[/{gpu_color}] "
+                f"[bold yellow]GPU[/bold yellow]"
                 f"[{gpu_temp_color}]{gpu_tmp_str}[/{gpu_temp_color}]\n"
                 f"[bold cyan]RAM[/bold cyan] [{ram_color}]{ram_percent:5.1f}%[/{ram_color}]\n"
                 f"[bold green]NET[/bold green] ▲[yellow]{format_bytes(net_up):>7}[/yellow] "
