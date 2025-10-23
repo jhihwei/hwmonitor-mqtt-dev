@@ -77,6 +77,7 @@ metrics: Dict[str, Any] = {
     "temperatures": None,
     "network_io": None,
     "system": None,
+    "gpu": None,
 }
 
 # ===== Helpers =====
@@ -344,6 +345,116 @@ def get_temps_block() -> Optional[Dict[str, Any]]:
 
     return out or None
 
+# ===== GPU =====
+def get_gpu_usage() -> Optional[float]:
+    """Get GPU usage percentage."""
+    import subprocess
+    try:
+        # Try NVIDIA GPU first
+        result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+                                capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except Exception:
+        pass
+
+    try:
+        # Try Intel GPU (via intel_gpu_top)
+        result = subprocess.run(['intel_gpu_top', '-o', '-', '-s', '100'],
+                                capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if 'Render/3D' in line:
+                    parts = line.split(':')
+                    if len(parts) > 1:
+                        pct = parts[1].strip().replace('%', '')
+                        return float(pct)
+    except Exception:
+        pass
+
+    try:
+        # Try Intel GPU via sysfs
+        with open('/sys/class/drm/card0/engine/rcs0/busy_percent', 'r') as f:
+            return float(f.read().strip())
+    except Exception:
+        pass
+
+    try:
+        # Try AMD GPU
+        with open('/sys/class/drm/card0/device/gpu_busy_percent', 'r') as f:
+            return float(f.read().strip())
+    except Exception:
+        pass
+
+    return None
+
+def get_gpu_temp() -> Optional[float]:
+    """Get GPU temperature in Celsius."""
+    import subprocess
+    try:
+        # Try NVIDIA GPU first
+        result = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'],
+                                capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except Exception:
+        pass
+
+    try:
+        # Try Intel GPU via sensors
+        temps = psutil.sensors_temperatures()
+        for sensor_name in ['i915', 'coretemp', 'pch_cannonlake']:
+            if sensor_name in temps:
+                for entry in temps[sensor_name]:
+                    if entry.label and any(x in entry.label.lower() for x in ['gpu', 'gt']):
+                        return entry.current
+    except Exception:
+        pass
+
+    try:
+        # Try Intel GPU via sysfs hwmon
+        for hwmon_path in glob.glob('/sys/class/drm/card0/hwmon/hwmon*/temp*_input'):
+            with open(hwmon_path, 'r') as f:
+                temp_millidegrees = int(f.read().strip())
+                return temp_millidegrees / 1000.0
+    except Exception:
+        pass
+
+    try:
+        # Try Raspberry Pi GPU
+        result = subprocess.run(['vcgencmd', 'measure_temp'],
+                                capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            temp_str = result.stdout.strip()
+            temp_val = temp_str.split('=')[1].replace("'C", "")
+            return float(temp_val)
+    except Exception:
+        pass
+
+    try:
+        # Try AMD GPU
+        temps = psutil.sensors_temperatures()
+        for sensor_name in ['amdgpu', 'radeon']:
+            if sensor_name in temps and temps[sensor_name]:
+                return temps[sensor_name][0].current
+    except Exception:
+        pass
+
+    return None
+
+def get_gpu_block() -> Optional[Dict[str, Any]]:
+    """Collect GPU metrics."""
+    usage = get_gpu_usage()
+    temp = get_gpu_temp()
+
+    # Only return GPU block if we have at least one valid metric
+    if usage is not None or temp is not None:
+        return {
+            "usage_percent": usage,
+            "temperature_celsius": temp,
+        }
+    return None
+
 
 # ===== MQTT publish =====
 def publish_metrics():
@@ -356,6 +467,7 @@ def publish_metrics():
         "disk_io": metrics["disk_io"],
         "temperatures": metrics["temperatures"],
         "network_io": metrics["network_io"],
+        "gpu": metrics["gpu"],
         "mqtt_stats": {
             "publish_ok": mqtt_stats["publish_ok"],
             "publish_err": mqtt_stats["publish_err"],
@@ -397,6 +509,11 @@ async def loop_temps():
     while True:
         metrics["temperatures"] = get_temps_block()
         await asyncio.sleep(10)
+
+async def loop_gpu():
+    while True:
+        metrics["gpu"] = get_gpu_block()
+        await asyncio.sleep(5)  # GPU metrics every 5 seconds
 
 async def loop_network():
     last = time.time()
@@ -447,6 +564,7 @@ async def main():
         loop_cpu_mem(),
         loop_disk(),
         loop_temps(),
+        loop_gpu(),
         loop_network(),
         loop_publish(),
         mqtt_reconnector(),

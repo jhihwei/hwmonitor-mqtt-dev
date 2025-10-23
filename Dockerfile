@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # RUN ln -snf /usr/share/zoneinfo/Asia/Taipei /etc/localtime && echo Asia/Taipei > /etc/timezone
 
 # 安裝必要套件（無需特權即可讀 /sys 與 /proc）
-RUN pip install --no-cache-dir psutil paho-mqtt
+RUN pip install --no-cache-dir psutil paho-mqtt python-dotenv
 
 # 複製程式
 WORKDIR /app

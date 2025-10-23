@@ -82,6 +82,113 @@ class HostInfoFooter(Static):
         except Exception:
             return 0.0
 
+    def get_host_gpu_usage(self) -> float:
+        """Get GPU usage percentage."""
+        try:
+            # Try NVIDIA GPU first
+            import subprocess
+            result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+                                    capture_output=True, text=True, timeout=1)
+            if result.returncode == 0:
+                return float(result.stdout.strip())
+        except Exception:
+            pass
+
+        try:
+            # Try Intel GPU (via sysfs)
+            # Intel GPU usage can be found in /sys/class/drm/card0/gt/gt0/rps_cur_freq_mhz
+            # or via intel_gpu_top if available
+            import subprocess
+            result = subprocess.run(['intel_gpu_top', '-o', '-', '-s', '100'],
+                                    capture_output=True, text=True, timeout=1)
+            if result.returncode == 0:
+                # Parse intel_gpu_top output for render/3d usage
+                for line in result.stdout.split('\n'):
+                    if 'Render/3D' in line:
+                        # Extract percentage from format like "Render/3D:  15.2%"
+                        parts = line.split(':')
+                        if len(parts) > 1:
+                            pct = parts[1].strip().replace('%', '')
+                            return float(pct)
+        except Exception:
+            pass
+
+        try:
+            # Try Intel GPU via sysfs (alternative method)
+            # Read engine busy status
+            with open('/sys/class/drm/card0/engine/rcs0/busy_percent', 'r') as f:
+                return float(f.read().strip())
+        except Exception:
+            pass
+
+        try:
+            # Try AMD GPU (check sysfs)
+            with open('/sys/class/drm/card0/device/gpu_busy_percent', 'r') as f:
+                return float(f.read().strip())
+        except Exception:
+            pass
+
+        return 0.0
+
+    def get_host_gpu_temp(self) -> str:
+        """Get GPU temperature."""
+        try:
+            # Try NVIDIA GPU first
+            import subprocess
+            result = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'],
+                                    capture_output=True, text=True, timeout=1)
+            if result.returncode == 0:
+                return f"{float(result.stdout.strip()):.0f}°C"
+        except Exception:
+            pass
+
+        try:
+            # Try Intel GPU via sensors
+            temps = psutil.sensors_temperatures()
+            for sensor_name in ['i915', 'coretemp', 'pch_cannonlake']:
+                if sensor_name in temps:
+                    for entry in temps[sensor_name]:
+                        # Look for GPU-related temperature labels
+                        if entry.label and any(x in entry.label.lower() for x in ['gpu', 'gt']):
+                            return f"{entry.current:.0f}°C"
+        except Exception:
+            pass
+
+        try:
+            # Try Intel GPU via sysfs hwmon
+            import glob
+            # Intel GPU temp can be found in /sys/class/drm/card0/hwmon/hwmon*/temp*_input
+            for hwmon_path in glob.glob('/sys/class/drm/card0/hwmon/hwmon*/temp*_input'):
+                with open(hwmon_path, 'r') as f:
+                    temp_millidegrees = int(f.read().strip())
+                    return f"{temp_millidegrees / 1000:.0f}°C"
+        except Exception:
+            pass
+
+        try:
+            # Try Raspberry Pi GPU
+            import subprocess
+            result = subprocess.run(['vcgencmd', 'measure_temp'],
+                                    capture_output=True, text=True, timeout=1)
+            if result.returncode == 0:
+                temp_str = result.stdout.strip()
+                # Output format: temp=45.0'C
+                temp_val = temp_str.split('=')[1].replace("'C", "")
+                return f"{float(temp_val):.0f}°C"
+        except Exception:
+            pass
+
+        try:
+            # Try AMD GPU via hwmon
+            temps = psutil.sensors_temperatures()
+            for sensor_name in ['amdgpu', 'radeon']:
+                if sensor_name in temps and temps[sensor_name]:
+                    return f"{temps[sensor_name][0].current:.0f}°C"
+        except Exception:
+            pass
+
+        return "N/A"
+
     def on_mount(self) -> None:
         """Update footer periodically."""
         self.set_interval(1, self.update_display)
@@ -92,6 +199,8 @@ class HostInfoFooter(Static):
         cpu = self.get_host_cpu()
         ram = self.get_host_ram()
         temp = self.get_host_temp()
+        gpu = self.get_host_gpu_usage()
+        gpu_temp = self.get_host_gpu_temp()
 
         # Color code based on CPU usage
         if cpu >= 75:
@@ -101,6 +210,14 @@ class HostInfoFooter(Static):
         else:
             cpu_color = "green"
 
+        # Color code based on GPU usage
+        if gpu >= 75:
+            gpu_color = "red"
+        elif gpu >= 50:
+            gpu_color = "yellow"
+        else:
+            gpu_color = "green"
+
         # Color code based on RAM usage
         if ram >= 80:
             ram_color = "red"
@@ -109,7 +226,7 @@ class HostInfoFooter(Static):
         else:
             ram_color = "green"
 
-        # Color code based on temperature
+        # Color code based on CPU temperature
         temp_val = temp.replace("°C", "").strip()
         try:
             temp_num = float(temp_val)
@@ -122,11 +239,33 @@ class HostInfoFooter(Static):
         except ValueError:
             temp_color = "dim"
 
-        content = (
-            f"CPU [{cpu_color}]{cpu:4.1f}%[/{cpu_color}] "
-            f"RAM [{ram_color}]{ram:4.1f}%[/{ram_color}] "
-            f"[{temp_color}]{temp}[/{temp_color}]"
-        )
+        # Color code based on GPU temperature
+        gpu_temp_val = gpu_temp.replace("°C", "").strip()
+        try:
+            gpu_temp_num = float(gpu_temp_val)
+            if gpu_temp_num >= 75:
+                gpu_temp_color = "red"
+            elif gpu_temp_num >= 65:
+                gpu_temp_color = "yellow"
+            else:
+                gpu_temp_color = "cyan"
+        except ValueError:
+            gpu_temp_color = "dim"
+
+        # Compact layout: CPU/GPU on same level, minimal spacing
+        if gpu > 0 or gpu_temp != "N/A":
+            content = (
+                f"C[{cpu_color}]{cpu:4.1f}%[/{cpu_color}][{temp_color}]{temp:>4}[/{temp_color}] "
+                f"G[{gpu_color}]{gpu:4.1f}%[/{gpu_color}][{gpu_temp_color}]{gpu_temp:>4}[/{gpu_temp_color}] "
+                f"R[{ram_color}]{ram:4.1f}%[/{ram_color}]"
+            )
+        else:
+            # No GPU detected, fall back to original layout
+            content = (
+                f"CPU [{cpu_color}]{cpu:4.1f}%[/{cpu_color}] "
+                f"RAM [{ram_color}]{ram:4.1f}%[/{ram_color}] "
+                f"[{temp_color}]{temp}[/{temp_color}]"
+            )
         self.update(content)
 
 class DeviceDisplay(Static):
@@ -158,6 +297,12 @@ class DeviceDisplay(Static):
         # --- Extract all metrics ---
         cpu_percent = data.get("cpu", {}).get("percent_total", 0)
         ram_percent = data.get("memory", {}).get("ram", {}).get("percent", 0)
+
+        # GPU metrics
+        gpu_data = data.get("gpu", {})
+        gpu_percent = gpu_data.get("usage_percent") if gpu_data else None
+        gpu_temp_val = gpu_data.get("temperature_celsius") if gpu_data else None
+        gpu_temp = f"{gpu_temp_val:.0f}°C" if gpu_temp_val is not None else None
 
         # CPU Temperature
         cpu_temp = "N/A"
@@ -201,16 +346,38 @@ class DeviceDisplay(Static):
 
         # --- Compact Format for 24x43 Display (3 devices) ---
         # Row budget: ~12 rows per device (43 rows - 2 header/footer = 41 / 3 ≈ 13)
-        metrics_text = (
-            f"[bold cyan]CPU[/bold cyan] [{cpu_color}]{cpu_percent:5.1f}%[/{cpu_color}] "
-            f"[{cpu_temp_color}]{cpu_temp:>5}[/{cpu_temp_color}]\n"
-            f"[bold cyan]RAM[/bold cyan] [{ram_color}]{ram_percent:5.1f}%[/{ram_color}]\n"
-            f"[bold green]NET[/bold green] ▲[yellow]{format_bytes(net_up):>7}[/yellow] "
-            f"▼[blue]{format_bytes(net_down):>7}[/blue]\n"
-            f"[bold magenta]DSK[/bold magenta] ◀[cyan]{format_bytes(total_read):>7}[/cyan] "
-            f"▶[yellow]{format_bytes(total_write):>7}[/yellow] "
-            f"[{disk_temp_color}]{max_disk_temp:>4}[/{disk_temp_color}]"
-        )
+
+        # Build CPU/GPU line (compact if GPU exists)
+        if gpu_percent is not None or gpu_temp is not None:
+            gpu_color = self._get_usage_color(gpu_percent) if gpu_percent is not None else "dim"
+            gpu_temp_color = self._get_temp_color(gpu_temp) if gpu_temp else "dim"
+            gpu_pct_str = f"{gpu_percent:5.1f}%" if gpu_percent is not None else "  N/A"
+            gpu_tmp_str = f"{gpu_temp:>5}" if gpu_temp else "  N/A"
+
+            metrics_text = (
+                f"[bold cyan]CPU[/bold cyan] [{cpu_color}]{cpu_percent:5.1f}%[/{cpu_color}] "
+                f"[{cpu_temp_color}]{cpu_temp:>5}[/{cpu_temp_color}] "
+                f"[bold yellow]GPU[/bold yellow] [{gpu_color}]{gpu_pct_str}[/{gpu_color}] "
+                f"[{gpu_temp_color}]{gpu_tmp_str}[/{gpu_temp_color}]\n"
+                f"[bold cyan]RAM[/bold cyan] [{ram_color}]{ram_percent:5.1f}%[/{ram_color}]\n"
+                f"[bold green]NET[/bold green] ▲[yellow]{format_bytes(net_up):>7}[/yellow] "
+                f"▼[blue]{format_bytes(net_down):>7}[/blue]\n"
+                f"[bold magenta]DSK[/bold magenta] ◀[cyan]{format_bytes(total_read):>7}[/cyan] "
+                f"▶[yellow]{format_bytes(total_write):>7}[/yellow] "
+                f"[{disk_temp_color}]{max_disk_temp:>4}[/{disk_temp_color}]"
+            )
+        else:
+            # No GPU, use original layout
+            metrics_text = (
+                f"[bold cyan]CPU[/bold cyan] [{cpu_color}]{cpu_percent:5.1f}%[/{cpu_color}] "
+                f"[{cpu_temp_color}]{cpu_temp:>5}[/{cpu_temp_color}]\n"
+                f"[bold cyan]RAM[/bold cyan] [{ram_color}]{ram_percent:5.1f}%[/{ram_color}]\n"
+                f"[bold green]NET[/bold green] ▲[yellow]{format_bytes(net_up):>7}[/yellow] "
+                f"▼[blue]{format_bytes(net_down):>7}[/blue]\n"
+                f"[bold magenta]DSK[/bold magenta] ◀[cyan]{format_bytes(total_read):>7}[/cyan] "
+                f"▶[yellow]{format_bytes(total_write):>7}[/yellow] "
+                f"[{disk_temp_color}]{max_disk_temp:>4}[/{disk_temp_color}]"
+            )
 
         self.metrics_label.update(metrics_text)
         self._set_stale(False)
