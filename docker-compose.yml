@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   # 系統監控代理 - 核心服務
   sys_agent:
