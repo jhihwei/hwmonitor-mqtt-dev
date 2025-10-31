@@ -1,0 +1,46 @@
+body {
+    background: #111;
+    color: #f1f1f1;
+}
+
+.container {
+    max-width: 720px;
+    padding: 2rem 1rem 4rem;
+}
+
+.card {
+    background: #1f1f1f;
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.error {
+    color: #ff6b6b;
+}
+
+.success {
+    color: #4cd964;
+}
+
+table {
+    width: 100%;
+}
+
+thead {
+    background: #333;
+}
+
+tr:nth-child(even) {
+    background: #222;
+}
+
+tr:nth-child(odd) {
+    background: #181818;
+}
+
+th, td {
+    color: #f1f1f1;
+    padding: 0.4rem 0.6rem;
+}
