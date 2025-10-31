@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-HW Monitor MQTT TUI Viewer - Portrait Mode (No-Flicker + Sticky Last Page)
-- Fixed 3 slots; rotate pages
-- If last page has < 3 devices, only replace the first N slots; keep others from previous page
+HW Monitor MQTT TUI Viewer - Portrait Mode (No-Flicker + Sticky Last Page + Full-Width Blue Title Bar)
+- 3 個固定槽位（Slot），避免 mount/remove 造成的閃爍
+- 翻頁：若最後一頁不足 3 台，只更新前 N 個槽位，後面沿用上一頁（黏著式）
+- 標題列：整條滿版藍底（含右側警示）
 """
 import json
 import os
@@ -252,8 +253,9 @@ class DeviceDisplay(Static):
         self.slot_index = slot_index
         self.host_id: Optional[str] = None
         self.last_update = 0.0
-        self.title_label = Label(f"[bold white on blue] — [/bold white on blue]")
-        self.stale_label = Label("")
+        # 改為純文字，藍底用 CSS 讓整條滿版
+        self.title_label = Label("", id="title")
+        self.stale_label = Label("", id="stale")
         self.metrics_label = Label("...", classes="metrics")
         self._stale = False
 
@@ -267,12 +269,12 @@ class DeviceDisplay(Static):
         """Bind this slot to a host (or None to hide content)."""
         self.host_id = host_id
         if host_id is None:
-            self.title_label.update(f"[bold white on blue] — [/bold white on blue]")
+            self.title_label.update("—")
             self.metrics_label.update(" ")
             self._set_stale(False)
             return
 
-        self.title_label.update(f"[bold white on blue] {host_id} [/bold white on blue]")
+        self.title_label.update(host_id)
         if data:
             self.device_data = data  # 觸發 watch_device_data
         else:
@@ -388,7 +390,7 @@ class DeviceDisplay(Static):
         self._stale = value
         if value:
             self.add_class("stale")
-            self.stale_label.update("[bold yellow on black]⚠[/bold yellow on black]")
+            self.stale_label.update("⚠")
         else:
             self.remove_class("stale")
             self.stale_label.update("")
@@ -401,7 +403,7 @@ class DeviceDisplay(Static):
 
 
 class MonitorApp(App):
-    """Portrait-optimized hardware monitor for 3.5" 720x1280 display (No-Flicker + Sticky)."""
+    """Portrait-optimized hardware monitor for 3.5" 720x1280 display (No-Flicker + Sticky + Full-Width Title)."""
 
     CSS = """
     Screen { background: $surface; }
@@ -419,22 +421,47 @@ class MonitorApp(App):
         background: $panel;
         height: auto;
         min-height: 7;
-        padding: 0 1;
+        padding: 0 0;         /* 與標題列平齊 */
         margin: 0;
     }
 
-    DeviceDisplay Label { text-style: bold; }
-
-    DeviceDisplay.stale {
-        background: #202020;
-        color: #808080;
+    /* ======= 滿版藍底標題列 ======= */
+    .title-row {
+        layout: horizontal;
+        width: 100%;
+        height: 1;                  /* 一行高 */
+        padding: 0 1;               /* 左右 1 字元內距 */
+        background: #1e66f5;        /* 藍底 */
+        color: white;               /* 白字 */
     }
-    DeviceDisplay.stale Label { color: #808080; }
+    .title-row Label {
+        text-style: bold;
+        color: white;
+    }
+    #title {
+        width: 1fr;
+        content-align: left middle;
+    }
+    #stale {
+        width: auto;
+        content-align: right middle;
+    }
 
-    .title-row { layout: horizontal; height: auto; width: 100%; padding-bottom: 0; }
-    .title-row Label { text-style: bold; }
+    /* stale 狀態時，整條標題列轉灰，字色變淡 */
+    DeviceDisplay.stale .title-row {
+        background: #404040;
+        color: #cfcfcf;
+    }
+    DeviceDisplay.stale .title-row Label {
+        color: #cfcfcf;
+    }
 
-    .metrics { height: auto; padding: 0; margin: 0; content-align: left top; }
+    .metrics {
+        height: auto;
+        padding: 0 1;               /* 與標題列左右對齊 */
+        margin: 0;
+        content-align: left top;
+    }
 
     Header { background: $accent-darken-2; }
     HostInfoFooter {
@@ -453,7 +480,7 @@ class MonitorApp(App):
         self.display_order: deque[str] = deque()
         self.current_page = 0
 
-        # 上一頁的可見 hosts（用來做「不足時黏著顯示」）
+        # 上一頁的可見 hosts（用於不足 3 台時的「黏著式」行為）
         self.prev_visible_hosts: List[Optional[str]] = [None] * MAX_DEVICES_PER_PAGE
 
         # 固定 3 個槽位，永不 mount/remove
@@ -532,8 +559,8 @@ class MonitorApp(App):
 
     def _compute_visible_hosts(self) -> List[Optional[str]]:
         """計算這一頁應顯示的 hosts。
-        - 一般情況：取該頁 slice
-        - 若不足 3 台：只更新前 N 個槽位，其餘沿用上一頁同位置（黏著）
+        - 一般：取該頁 slice（滿 3 台）
+        - 不足 3 台：只更新前 N 個，剩餘沿用上一頁相同位置（黏著）
         """
         base = list(self.display_order)
         num_devices = len(base)
@@ -542,27 +569,19 @@ class MonitorApp(App):
             return [None] * MAX_DEVICES_PER_PAGE
 
         if num_devices <= MAX_DEVICES_PER_PAGE:
-            # 裝置 <= 3：不重複顯示，且沒有翻頁；直接回傳現有
             vis = base + [None] * (MAX_DEVICES_PER_PAGE - len(base))
             return vis
 
-        # 裝置 > 3：正常切頁
         start_index = self.current_page * MAX_DEVICES_PER_PAGE
         end_index = start_index + MAX_DEVICES_PER_PAGE
-        page_slice = base[start_index:end_index]  # 這一頁真正擁有的裝置（可能 < 3）
+        page_slice = base[start_index:end_index]  # 可能 < 3
 
         if len(page_slice) == MAX_DEVICES_PER_PAGE:
-            # 滿 3 台，正常顯示
             return page_slice
 
-        # 不足 3 台：黏著顯示
-        # 例如只 1 台 -> slot1 換成新裝置，slot2/3 維持上一頁
-        # 例如只 2 台 -> slot1/2 換成新裝置，slot3 維持上一頁
         vis: List[Optional[str]] = [None] * MAX_DEVICES_PER_PAGE
-        # 先放新頁的裝置於前面 N 個位置
         for i in range(len(page_slice)):
             vis[i] = page_slice[i]
-        # 後面位置沿用上一頁
         for i in range(len(page_slice), MAX_DEVICES_PER_PAGE):
             vis[i] = self.prev_visible_hosts[i] if self.prev_visible_hosts else None
         return vis
