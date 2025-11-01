@@ -75,6 +75,24 @@ docker compose --profile full up -d
 docker compose --profile agent --profile broker --profile web up -d
 ```
 
+### 💻 Windows 使用者
+
+本專案的 Agent 也可以直接在 Windows 上執行（不透過 Docker）。
+
+1.  **安裝 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases)**：
+    *   下載並執行 LibreHardwareMonitor。
+    *   **必須以管理員權限執行**。
+    *   在 `Options` -> `General` 中，確保 `WMI Provider` 已啟用。
+2.  **執行 Agent**：
+    *   使用 `agent_sender_windows.py` 腳本。
+    *   確保您的環境已安裝必要的 Python 套件 (`wmi`, `psutil`, `paho-mqtt`, `python-dotenv`)。
+    *   設定好 `.env` 檔案後，執行：
+        ```bash
+        # 假設您使用 uv
+        uv run .\agent_sender_windows.py
+        ```
+
+
 ### 3. 訪問監控介面
 
 ```bash
