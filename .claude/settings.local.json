@@ -28,7 +28,8 @@
       "Bash(git add docker-compose.yml tui_viewer.py uv.lock)",
       "Bash(git commit -m \"refactor: 優化 TUI 顯示邏輯，實現防閃爍與黏性頁面切換\n\n- 移除 docker-compose.yml 舊版本宣告，符合最新規範\n- 重構 tui_viewer.py 實現固定槽位機制，避免元件頻繁 mount/remove 造成閃爍\n- 實現黏性最後頁面功能，裝置不足時保持上一頁內容顯示\n- 更新依賴套件（uv.lock）\")",
       "Bash(git add tui_viewer.py)",
-      "Bash(git commit -m \"style: 優化 TUI 裝置標題列顯示，實現滿版藍底設計\n\n- 標題列改為滿版藍底白字設計，提升視覺識別度\n- 移除行內樣式標記，改用 CSS 控制整條標題列背景色\n- stale 狀態時標題列轉為灰底淡色，視覺反饋更清晰\n- 調整 padding 確保標題列與內容區域對齊一致\n- 精簡註解，保持程式碼整潔\")"
+      "Bash(git commit -m \"style: 優化 TUI 裝置標題列顯示，實現滿版藍底設計\n\n- 標題列改為滿版藍底白字設計，提升視覺識別度\n- 移除行內樣式標記，改用 CSS 控制整條標題列背景色\n- stale 狀態時標題列轉為灰底淡色，視覺反饋更清晰\n- 調整 padding 確保標題列與內容區域對齊一致\n- 精簡註解，保持程式碼整潔\")",
+      "Bash(timeout 10 mosquitto_sub:*)"
     ],
     "deny": [],
     "ask": []

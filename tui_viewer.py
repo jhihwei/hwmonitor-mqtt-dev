@@ -315,9 +315,18 @@ class DeviceDisplay(Static):
             if disk_temps:
                 max_disk_temp = f"{max(disk_temps):.0f}°C"
 
-        net_total = data.get("network_io", {}).get("total", {}).get("rate", {})
-        net_up = net_total.get("tx_bytes_per_s", 0)
-        net_down = net_total.get("rx_bytes_per_s", 0)
+        # 計算所有網卡中的最大上下傳速度
+        network_io = data.get("network_io", {})
+        per_nic = network_io.get("per_nic", {})
+
+        net_up = 0
+        net_down = 0
+        for nic_name, nic_data in per_nic.items():
+            rate = nic_data.get("rate", {})
+            tx = rate.get("tx_bytes_per_s", 0)
+            rx = rate.get("rx_bytes_per_s", 0)
+            net_up = max(net_up, tx)
+            net_down = max(net_down, rx)
 
         disk_io = data.get("disk_io", {})
         total_read = sum(d.get("rate", {}).get("read_bytes_per_s", 0) for d in disk_io.values())
