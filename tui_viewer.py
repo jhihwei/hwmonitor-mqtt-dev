@@ -175,11 +175,16 @@ class HostInfoFooter(Static):
         self.update_display()
 
     def update_display(self) -> None:
+        from datetime import datetime
+
         cpu = self.get_host_cpu()
         ram = self.get_host_ram()
         temp = self.get_host_temp()
         gpu = self.get_host_gpu_usage()
         gpu_temp = self.get_host_gpu_temp()
+
+        # 獲取當前時間（24小時制）
+        current_time = datetime.now().strftime("%H:%M:%S")
 
         if cpu >= 75:
             cpu_color = "red"
@@ -226,19 +231,66 @@ class HostInfoFooter(Static):
         except ValueError:
             gpu_temp_color = "dim"
 
+        # 建立滿版的 footer，左側為系統資訊，右側為時間
         if gpu_temp != "N/A":
-            content = (
+            left_content = (
                 f"C[{cpu_color}]{cpu:4.1f}%[/{cpu_color}][{temp_color}]{temp:>4}[/{temp_color}] "
                 f"G[{gpu_temp_color}]{gpu_temp:>4}[/{gpu_temp_color}] "
                 f"R[{ram_color}]{ram:4.1f}%[/{ram_color}]"
             )
         else:
-            content = (
+            left_content = (
                 f"CPU [{cpu_color}]{cpu:4.1f}%[/{cpu_color}] "
                 f"RAM [{ram_color}]{ram:4.1f}%[/{ram_color}] "
                 f"[{temp_color}]{temp}[/{temp_color}]"
             )
+
+        # 使用終端寬度計算填充空白，讓時間靠右顯示
+        try:
+            # 嘗試獲取終端寬度
+            import shutil
+            term_width = shutil.get_terminal_size().columns - 2  # 減去 padding
+            # 估算左側內容的可見字符長度（不含標記）
+            import re
+            visible_left = re.sub(r'\[.*?\]', '', left_content)
+            left_len = len(visible_left)
+            time_len = 8  # "HH:MM:SS" = 8 字符
+            separator_len = 1  # "│"
+
+            # 計算需要的空白數量
+            spaces_needed = max(1, term_width - left_len - time_len - separator_len - 1)
+            padding = " " * spaces_needed
+
+            content = f"{left_content}{padding}[dim]│[/dim] [bold cyan]{current_time}[/bold cyan]"
+        except:
+            # 如果無法獲取終端寬度，使用固定填充
+            content = f"{left_content}                                      [dim]│[/dim] [bold cyan]{current_time}[/bold cyan]"
+
         self.update(content)
+
+class ClockDisplay(Static):
+    """固定位置的時間顯示區域"""
+
+    def on_mount(self) -> None:
+        self.set_interval(1, self.update_time)
+        self.update_time()
+
+    def update_time(self) -> None:
+        from datetime import datetime
+
+        now = datetime.now()
+        current_time = now.strftime("%H:%M:%S")
+        current_date = now.strftime("%Y-%m-%d")
+        weekday = now.strftime("%A")
+
+        # 建立時間顯示
+        time_display = (
+            f"[bold bright_cyan]Time[/bold bright_cyan] [bold bright_white]{current_time}[/bold bright_white]  "
+            f"[bold bright_cyan]Date[/bold bright_cyan] [bold bright_white]{current_date}[/bold bright_white]  "
+            f"[bold bright_cyan]Day[/bold bright_cyan] [bold bright_white]{weekday}[/bold bright_white]"
+        )
+
+        self.update(time_display)
 
 class DeviceDisplay(Static):
     """
@@ -269,6 +321,7 @@ class DeviceDisplay(Static):
         """Bind this slot to a host (or None to hide content)."""
         self.host_id = host_id
         if host_id is None:
+            # 當沒有主機時，隱藏內容
             self.title_label.update("—")
             self.metrics_label.update(" ")
             self._set_stale(False)
@@ -315,18 +368,21 @@ class DeviceDisplay(Static):
             if disk_temps:
                 max_disk_temp = f"{max(disk_temps):.0f}°C"
 
-        # 計算所有網卡中的最大上下傳速度
+        # 計算所有網卡中的最大上傳和下傳速度（分別計算）
         network_io = data.get("network_io", {})
         per_nic = network_io.get("per_nic", {})
 
-        net_up = 0
-        net_down = 0
+        # 收集所有網卡的上傳和下傳速度
+        upload_speeds = []
+        download_speeds = []
         for nic_name, nic_data in per_nic.items():
             rate = nic_data.get("rate", {})
-            tx = rate.get("tx_bytes_per_s", 0)
-            rx = rate.get("rx_bytes_per_s", 0)
-            net_up = max(net_up, tx)
-            net_down = max(net_down, rx)
+            upload_speeds.append(rate.get("tx_bytes_per_s", 0))
+            download_speeds.append(rate.get("rx_bytes_per_s", 0))
+
+        # 分別找出最大值
+        net_up = max(upload_speeds) if upload_speeds else 0
+        net_down = max(download_speeds) if download_speeds else 0
 
         disk_io = data.get("disk_io", {})
         total_read = sum(d.get("rate", {}).get("read_bytes_per_s", 0) for d in disk_io.values())
@@ -473,12 +529,24 @@ class MonitorApp(App):
     }
 
     Header { background: $accent-darken-2; }
+
+    ClockDisplay {
+        height: auto;
+        width: 100%;
+        padding: 1;
+        content-align: center middle;
+        background: $surface;
+    }
+
     HostInfoFooter {
-        background: $accent-darken-2;
+        background: #1e66f5;     /* 藍底與標題列一致 */
+        color: white;            /* 白字 */
         dock: bottom;
         height: 1;
-        content-align: right middle;
+        width: 100%;
+        content-align: left middle;   /* 預設左對齊，透過文字格式化來調整 */
         padding: 0 1;
+        text-style: bold;
     }
     """
 
@@ -500,6 +568,7 @@ class MonitorApp(App):
         with Container(id="devices_container"):
             for slot in self.slots:
                 yield slot
+        yield ClockDisplay()
         yield HostInfoFooter()
 
     def on_mount(self) -> None:
