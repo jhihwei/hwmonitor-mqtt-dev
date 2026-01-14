@@ -558,23 +558,46 @@ async def mqtt_reconnector():
 # ===== MAIN =====
 async def main():
     print(f"🚀 Async Agent started on {HOSTNAME}")
-    # 預熱 CPU 計算（提升第一筆準確度）
+    
+    # --- 修正：將 MQTT 連線啟動移入 main 裡面 ---
+    try:
+        mqtt_connect()
+        mqtt_client.loop_start() 
+    except Exception as e:
+        print(f"❌ Failed to start MQTT: {e}")
+        return # 如果連線初始化就失敗，直接退出
+
+    # 預熱 CPU 計算
     psutil.cpu_percent(interval=None, percpu=True)
-    await asyncio.gather(
-        loop_cpu_mem(),
-        loop_disk(),
-        loop_temps(),
-        loop_gpu(),
-        loop_network(),
-        loop_publish(),
-        mqtt_reconnector(),
-    )
+    
+    # 使用 gather 同步執行所有任務
+    try:
+        await asyncio.gather(
+            loop_cpu_mem(),
+            loop_disk(),
+            loop_temps(),
+            loop_gpu(),
+            loop_network(),
+            loop_publish(),
+            mqtt_reconnector(),
+        )
+    except Exception as e:
+        print(f"🚨 Runtime Error: {e}")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("🛑 stopped by user")
-    finally:
-        mqtt_client.loop_stop()
-        mqtt_client.disconnect()
+    # 確保環境變數有正確讀取，或是提供 fallback
+    if not BROKER_HOST:
+        print("❌ Error: BROKER_HOST is not set.")
+    else:
+        try:
+            # 這是標準啟動方式
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            print("\n🛑 Stopped by user")
+        except Exception as e:
+            print(f"💥 Fatal Error: {e}")
+        finally:
+            # 確保最後一定有清理資源
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+            print("Cleanup complete.")
