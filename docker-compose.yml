@@ -1,34 +1,35 @@
+version: "3.9"
+
 services:
   # 系統監控代理 - 核心服務
   sys_agent:
-    build: .
-    container_name: sys-agent
-    restart: unless-stopped
-    profiles: ["agent", "full"]  # 啟用 agent 或 full profile 時運行
+      build: .
+      container_name: sys-agent
+      # 修正：在 PVE 宿主機，建議使用 unconfined 或直接用特權模式
+      security_opt:
+        - apparmor:unconfined
+      restart: unless-stopped
+      profiles: ["agent", "full"]
 
-    # 共享主機命名空間，讓 psutil/溫度/NIC I/O 讀到主機資訊
-    network_mode: host
-    pid: host
+      network_mode: host
+      pid: host
 
-    # 只需讀 /sys；/proc 會因 pid: host 自然對應到主機
-    volumes:
-      - /sys:/sys:ro
-      - /dev:/dev:ro   # 非必須，但若未來需要讀一些裝置屬性可用（唯讀即可）
+      volumes:
+        - /sys:/sys:ro
+        # 修正：移除 /proc 掛載，因為 pid: host 已經提供了
+        # 如果之後發現 psutil 讀不到某些資訊，再加回來，但先嘗試移除
 
-    # 最低權限即可；讀取 /sys /proc 不需要 privileged
-    privileged: false
-    security_opt:
-      - no-new-privileges:true
-    read_only: true   # 容器根檔系統唯讀
-    tmpfs:
-      - /tmp
-      - /var/tmp
+      # 修正：監控 Agent 建議開啟特權模式以存取溫度與 GPU 硬體介面
+      privileged: true 
+      
+      # 修正：暫時將此設為 false 排除 AppArmor 報錯問題
+      read_only: false
 
-    environment:
-      BROKER_HOST: ${BROKER_HOST}
-      BROKER_PORT: ${BROKER_PORT:-1883}
-      MQTT_USER: ${MQTT_USER}
-      MQTT_PASS: ${MQTT_PASS}
+      environment:
+        BROKER_HOST: ${BROKER_HOST}
+        BROKER_PORT: ${BROKER_PORT:-1883}
+        MQTT_USER: ${MQTT_USER}
+        MQTT_PASS: ${MQTT_PASS}
 
   # MQTT Broker - Mosquitto
   mqtt_broker:
