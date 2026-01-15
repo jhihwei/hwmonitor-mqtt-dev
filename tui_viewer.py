@@ -554,6 +554,7 @@ class MonitorApp(App):
         super().__init__()
         self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self.all_devices_data = {}             # host -> last payload
+        self.host_last_seen = {}               # host -> timestamp
         self.display_order: deque[str] = deque()
         self.current_page = 0
 
@@ -574,7 +575,7 @@ class MonitorApp(App):
     def on_mount(self) -> None:
         self.setup_mqtt()
         self.set_interval(ROTATION_INTERVAL_SECONDS, self.rotate_devices)
-        self.set_interval(1, self.check_stale_status)
+        self.set_interval(1, self.check_timeouts)
         self.update_slots()
 
     # ---------------- MQTT ----------------
@@ -604,6 +605,7 @@ class MonitorApp(App):
 
             is_new = host not in self.all_devices_data
             self.all_devices_data[host] = payload
+            self.host_last_seen[host] = time.time()
 
             if host not in self.display_order:
                 self.display_order.append(host)
@@ -675,10 +677,32 @@ class MonitorApp(App):
         # 更新上一頁快取（供下次不足時黏著使用）
         self.prev_visible_hosts = visible_hosts.copy()
 
-    def check_stale_status(self) -> None:
+    def check_timeouts(self) -> None:
+        """檢查並移除超過 STALE_SECONDS 未更新的裝置"""
         now = time.time()
-        for slot in self.slots:
-            slot.check_staleness(now)
+        to_remove = []
+
+        # 找出超時的裝置
+        for host, last_seen in self.host_last_seen.items():
+            if now - last_seen > STALE_SECONDS:
+                to_remove.append(host)
+
+        if not to_remove:
+            return
+
+        # 執行移除
+        changed = False
+        for host in to_remove:
+            if host in self.all_devices_data:
+                del self.all_devices_data[host]
+                del self.host_last_seen[host]
+                if host in self.display_order:
+                    self.display_order.remove(host)
+                changed = True
+                self.notify(f"Device removal: {host} (timeout)", severity="warning")
+
+        if changed:
+            self.update_slots()
 
 
 if __name__ == "__main__":
