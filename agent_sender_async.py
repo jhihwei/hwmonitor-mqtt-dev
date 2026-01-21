@@ -442,18 +442,119 @@ def get_gpu_temp() -> Optional[float]:
 
     return None
 
-def get_gpu_block() -> Optional[Dict[str, Any]]:
-    """Collect GPU metrics."""
-    usage = get_gpu_usage()
-    temp = get_gpu_temp()
+def get_gpu_block() -> list:
+    """Collect GPU metrics (Multi-GPU support)."""
+    gpus: list = []
+    
+    # 1. NVIDIA GPUs
+    import subprocess
+    try:
+        res = subprocess.run(
+            ['nvidia-smi', '--query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total', 
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=2
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            import csv
+            reader = csv.reader(res.stdout.strip().splitlines())
+            for row in reader:
+                try:
+                    gpus.append({
+                        "usage_percent": float(row[0]),
+                        "temperature_celsius": float(row[1]),
+                        "memory_used_mb": float(row[2]),
+                        "memory_total_mb": float(row[3])
+                    })
+                except (ValueError, IndexError):
+                    pass
+    except Exception:
+        pass
 
-    # Only return GPU block if we have at least one valid metric
-    if usage is not None or temp is not None:
-        return {
-            "usage_percent": usage,
-            "temperature_celsius": temp,
-        }
-    return None
+    
+    # 2. Integrated/Other GPUs (Intel/AMD)
+    other_usage = None
+    other_temp = None
+    
+    # Usage detection
+    try:
+        # Intel GPU (intel_gpu_top)
+        res = subprocess.run(['intel_gpu_top', '-o', '-', '-s', '100'],
+                             capture_output=True, text=True, timeout=1)
+        if res.returncode == 0:
+            for line in res.stdout.split('\n'):
+                if 'Render/3D' in line:
+                    parts = line.split(':')
+                    if len(parts) > 1:
+                        other_usage = float(parts[1].strip().replace('%', ''))
+                    if len(parts) > 1:
+                        other_usage = float(parts[1].strip().replace('%', ''))
+                        break
+    except Exception:
+        pass
+        
+    if other_usage is None:
+        import glob
+        try:
+             # Sysfs (Intel/AMD) - Loop through all cards (card0, card1, etc.)
+             cards = glob.glob('/sys/class/drm/card*')
+         try:
+             # Sysfs (Intel/AMD) - Loop through all cards (card0, card1, etc.)
+             cards = glob.glob('/sys/class/drm/card*')
+             for card_path in cards:
+                 # Try specific Intel path first
+                 p1 = os.path.join(card_path, 'engine', 'rcs0', 'busy_percent')
+                 try:
+                     with open(p1, 'r') as f:
+                         val = float(f.read().strip())
+                         other_usage = val
+                         break
+                 except Exception:
+                     pass
+
+                 # Try AMD path
+                 p2 = os.path.join(card_path, 'device', 'gpu_busy_percent')
+                 try:
+                     with open(p2, 'r') as f:
+                         val = float(f.read().strip())
+                         other_usage = val
+                         break
+                 except Exception:
+                     pass
+                 
+                 if other_usage is not None:
+                     break
+        except Exception:
+             pass
+
+    # Temp detection
+    if other_temp is None: 
+         try:
+             temps = psutil.sensors_temperatures()
+             for name in ['i915', 'amdgpu', 'radeon']:
+                 if name in temps:
+                     for entry in temps[name]:
+                         if entry.current is not None:
+                             other_temp = entry.current
+                             break
+                 if other_temp is not None: break
+         except Exception:
+             pass
+
+    if other_usage is not None or other_temp is not None:
+        gpus.append({
+            "usage_percent": other_usage if other_usage is not None else 0.0,
+            "temperature_celsius": other_temp,
+            "memory_used_mb": 0.0,
+            "memory_total_mb": 0.0
+        })
+        gpus.append({
+            "usage_percent": other_usage if other_usage is not None else 0.0,
+            "temperature_celsius": other_temp,
+            "memory_used_mb": 0.0,
+            "memory_total_mb": 0.0
+        })
+
+    return gpus
 
 
 # ===== MQTT publish =====
@@ -467,7 +568,9 @@ def publish_metrics():
         "disk_io": metrics["disk_io"],
         "temperatures": metrics["temperatures"],
         "network_io": metrics["network_io"],
-        "gpu": metrics["gpu"],
+        "network_io": metrics["network_io"],
+        "gpu": metrics["gpu"][0] if metrics["gpu"] else None,
+        "gpus": metrics["gpu"],
         "mqtt_stats": {
             "publish_ok": mqtt_stats["publish_ok"],
             "publish_err": mqtt_stats["publish_err"],

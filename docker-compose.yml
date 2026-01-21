@@ -16,8 +16,16 @@ services:
 
       volumes:
         - /sys:/sys:ro
-        # 修正：移除 /proc 掛載，因為 pid: host 已經提供了
-        # 如果之後發現 psutil 讀不到某些資訊，再加回來，但先嘗試移除
+        - /dev:/dev:rw
+        # 嘗試手動掛載 NVIDIA 驅動相關檔案 (因為主機無 nvidia-container-toolkit)
+        - /usr/bin/nvidia-smi:/usr/bin/nvidia-smi:ro
+        - /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1:ro
+
+
+      # 讓容器能存取 GPU 裝置
+      devices:
+        - /dev/dri:/dev/dri
+
 
       # 修正：監控 Agent 建議開啟特權模式以存取溫度與 GPU 硬體介面
       privileged: true 

@@ -8,7 +8,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # 可選：timezone（若要）
 # RUN ln -snf /usr/share/zoneinfo/Asia/Taipei /etc/localtime && echo Asia/Taipei > /etc/timezone
 
-# 安裝必要套件（無需特權即可讀 /sys 與 /proc）
+# 安裝必要套件與硬體監控工具
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    intel-gpu-tools \
+    pciutils \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir psutil paho-mqtt python-dotenv
 
 # 複製程式

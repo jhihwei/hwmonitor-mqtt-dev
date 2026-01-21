@@ -342,9 +342,23 @@ class DeviceDisplay(Static):
         cpu_percent = data.get("cpu", {}).get("percent_total", 0)
         ram_percent = data.get("memory", {}).get("ram", {}).get("percent", 0)
 
-        gpu_data = data.get("gpu", {})
-        gpu_temp_val = gpu_data.get("temperature_celsius") if gpu_data else None
-        gpu_temp = f"{gpu_temp_val:.0f}°C" if gpu_temp_val is not None else None
+        gpu_temps = []
+        gpus = data.get("gpus")
+        if not gpus:
+            g_item = data.get("gpu")
+            if isinstance(g_item, list):
+                gpus = g_item
+            elif isinstance(g_item, dict):
+                gpus = [g_item]
+            else:
+                gpus = []
+
+        for g in gpus:
+            if not isinstance(g, dict): continue
+            val = g.get("temperature_celsius")
+            gpu_temps.append(f"{val:.0f}°C" if val is not None else None)
+
+        gpu_temp = gpu_temps[0] if gpu_temps else None
 
         cpu_temp = "N/A"
         temps = data.get("temperatures")
@@ -393,32 +407,28 @@ class DeviceDisplay(Static):
         cpu_temp_color = self._get_temp_color(cpu_temp)
         disk_temp_color = self._get_temp_color(max_disk_temp)
 
+        gpu1_str = ""
         if gpu_temp is not None:
-            gpu_temp_color = self._get_temp_color(gpu_temp)
-            gpu_tmp_str = f"{gpu_temp:>5}"
-            metrics_text = (
-                f"[bold cyan]CPU[/bold cyan][{cpu_color}]{cpu_percent:5.1f}%[/{cpu_color}]"
-                f"[{cpu_temp_color}]{cpu_temp:>5}[/{cpu_temp_color}] "
-                f"[bold yellow]GPU[/bold yellow]"
-                f"[{gpu_temp_color}]{gpu_tmp_str}[/{gpu_temp_color}]\n"
-                f"[bold cyan]RAM[/bold cyan] [{ram_color}]{ram_percent:5.1f}%[/{ram_color}]\n"
-                f"[bold green]NET[/bold green] ▲[yellow]{format_bytes(net_up):>7}[/yellow] "
-                f"▼[#FF69B4]{format_bytes(net_down):>7}[/#FF69B4]\n"
-                f"[bold magenta]DSK[/bold magenta] ◀[cyan]{format_bytes(total_read):>7}[/cyan] "
-                f"▶[yellow]{format_bytes(total_write):>7}[/yellow] "
-                f"[{disk_temp_color}]{max_disk_temp:>4}[/{disk_temp_color}]"
-            )
-        else:
-            metrics_text = (
-                f"[bold cyan]CPU[/bold cyan] [{cpu_color}]{cpu_percent:5.1f}%[/{cpu_color}] "
-                f"[{cpu_temp_color}]{cpu_temp:>5}[/{cpu_temp_color}]\n"
-                f"[bold cyan]RAM[/bold cyan] [{ram_color}]{ram_percent:5.1f}%[/{ram_color}]\n"
-                f"[bold green]NET[/bold green] ▲[yellow]{format_bytes(net_up):>7}[/yellow] "
-                f"▼[#FF69B4]{format_bytes(net_down):>7}[/#FF69B4]\n"
-                f"[bold magenta]DSK[/bold magenta] ◀[cyan]{format_bytes(total_read):>7}[/cyan] "
-                f"▶[yellow]{format_bytes(total_write):>7}[/yellow] "
-                f"[{disk_temp_color}]{max_disk_temp:>4}[/{disk_temp_color}]"
-            )
+            c = self._get_temp_color(gpu_temp)
+            gpu1_str = f" [bold yellow]GPU[/bold yellow][{c}]{gpu_temp:>5}[/{c}]"
+
+        gpu2_str = ""
+        if len(gpu_temps) > 1 and gpu_temps[1] is not None:
+            g2_t = gpu_temps[1]
+            c = self._get_temp_color(g2_t)
+            # Align with GPU1 (CPU line width approx 15, RAM line width approx 10, diff 5)
+            gpu2_str = f"     [bold yellow]GPU[/bold yellow][{c}]{g2_t:>5}[/{c}]"
+
+        metrics_text = (
+            f"[bold cyan]CPU[/bold cyan][{cpu_color}]{cpu_percent:5.1f}%[/{cpu_color}]"
+            f"[{cpu_temp_color}]{cpu_temp:>5}[/{cpu_temp_color}]{gpu1_str}\n"
+            f"[bold cyan]RAM[/bold cyan] [{ram_color}]{ram_percent:5.1f}%[/{ram_color}]{gpu2_str}\n"
+            f"[bold green]NET[/bold green] ▲[yellow]{format_bytes(net_up):>7}[/yellow] "
+            f"▼[#FF69B4]{format_bytes(net_down):>7}[/#FF69B4]\n"
+            f"[bold magenta]DSK[/bold magenta] ◀[cyan]{format_bytes(total_read):>7}[/cyan] "
+            f"▶[yellow]{format_bytes(total_write):>7}[/yellow] "
+            f"[{disk_temp_color}]{max_disk_temp:>4}[/{disk_temp_color}]"
+        )
 
         self.metrics_label.update(metrics_text)
         self._set_stale(False)
