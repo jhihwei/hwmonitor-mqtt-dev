@@ -495,36 +495,33 @@ def get_gpu_block() -> list:
     if other_usage is None:
         import glob
         try:
-             # Sysfs (Intel/AMD) - Loop through all cards (card0, card1, etc.)
-             cards = glob.glob('/sys/class/drm/card*')
-         try:
-             # Sysfs (Intel/AMD) - Loop through all cards (card0, card1, etc.)
-             cards = glob.glob('/sys/class/drm/card*')
-             for card_path in cards:
-                 # Try specific Intel path first
-                 p1 = os.path.join(card_path, 'engine', 'rcs0', 'busy_percent')
-                 try:
-                     with open(p1, 'r') as f:
-                         val = float(f.read().strip())
-                         other_usage = val
-                         break
-                 except Exception:
-                     pass
+            # Sysfs (Intel/AMD) - Loop through all cards (card0, card1, etc.)
+            cards = glob.glob('/sys/class/drm/card*')
+            for card_path in cards:
+                # Try specific Intel path first
+                p1 = os.path.join(card_path, 'engine', 'rcs0', 'busy_percent')
+                try:
+                    with open(p1, 'r') as f:
+                        val = float(f.read().strip())
+                        other_usage = val
+                        break
+                except Exception:
+                    pass
 
-                 # Try AMD path
-                 p2 = os.path.join(card_path, 'device', 'gpu_busy_percent')
-                 try:
-                     with open(p2, 'r') as f:
-                         val = float(f.read().strip())
-                         other_usage = val
-                         break
-                 except Exception:
-                     pass
-                 
-                 if other_usage is not None:
-                     break
+                # Try AMD path
+                p2 = os.path.join(card_path, 'device', 'gpu_busy_percent')
+                try:
+                    with open(p2, 'r') as f:
+                        val = float(f.read().strip())
+                        other_usage = val
+                        break
+                except Exception:
+                    pass
+
+                if other_usage is not None:
+                    break
         except Exception:
-             pass
+            pass
 
     # Temp detection
     if other_temp is None: 
