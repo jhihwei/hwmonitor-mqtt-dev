@@ -1,7 +1,0 @@
-include README.md
-include DEPLOYMENT.md
-include LICENSE
-include *.sh
-include *.service
-recursive-include wifi_portal/webui/templates *.html
-recursive-include wifi_portal/webui/static *.css *.js

@@ -1,0 +1,3 @@
+[submodule "hwmonitor-core"]
+	path = hwmonitor-core
+	url = ../hwmonitor-mqtt-core
