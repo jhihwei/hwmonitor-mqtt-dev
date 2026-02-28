@@ -42,8 +42,8 @@ FORCE_PORTRAIT = os.getenv("PYGAME_FORCE_PORTRAIT", "1") == "1"
 PORTRAIT_ROTATE_DEGREE = int(os.getenv("PYGAME_PORTRAIT_ROTATE_DEGREE", "90"))
 
 # --- Colors ---
-C_BG = (15, 23, 42)
-C_CARD = (30, 41, 59)
+C_BG = (10, 15, 30)
+C_CARD = (22, 32, 48)
 C_CARD_STALE = (60, 38, 45)
 C_TEXT = (248, 250, 252)
 C_DIM = (148, 163, 184)
@@ -51,6 +51,7 @@ C_ACCENT = (56, 189, 248)
 C_ACCENT_DARK = (14, 116, 144)
 C_CPU = (52, 211, 153)
 C_RAM = (167, 139, 250)
+C_GPU = (249, 115, 22)
 C_WARN = (250, 204, 21)
 C_CRIT = (248, 113, 113)
 C_DISK = (59, 130, 246)
@@ -81,6 +82,15 @@ def pick_temp_color(temp_c: Optional[float]) -> Tuple[int, int, int]:
     if temp_c >= 70:
         return C_WARN
     return C_TEXT
+
+
+def pick_usage_color(percent: float, base: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    """Pick warning color from usage percent."""
+    if percent >= 90.0:
+        return C_CRIT
+    if percent >= 80.0:
+        return C_WARN
+    return base
 
 
 def fit_text(font: pygame.font.Font, text: str, max_width: int) -> str:
@@ -204,6 +214,22 @@ def format_temp(temp_c: Optional[float]) -> str:
     return f"{temp_c:.0f}°"
 
 
+def extract_primary_gpu_temp(gpu_temps: Sequence[float]) -> Optional[float]:
+    """Pick primary GPU temperature for compact render."""
+    if not gpu_temps:
+        return None
+    return max(float(temp) for temp in gpu_temps)
+
+
+def temp_to_percent(temp_c: Optional[float], max_temp: float = 95.0) -> float:
+    """Convert temperature to 0..100 percent scale."""
+    if temp_c is None:
+        return 0.0
+    safe_max = max(1.0, max_temp)
+    ratio = max(0.0, min(1.0, float(temp_c) / safe_max))
+    return ratio * 100.0
+
+
 def clamp_int(value: int, low: int, high: int) -> int:
     """Clamp integer into [low, high]."""
     return max(low, min(high, value))
@@ -273,6 +299,7 @@ class DeviceView:
     disk_temp_c: Optional[float]
     cpu_hist: Tuple[float, ...]
     ram_hist: Tuple[float, ...]
+    gpu_temp_hist: Tuple[float, ...]
     last_seen_ts: float
 
 
@@ -292,6 +319,7 @@ class DeviceState:
     disk_temp_c: Optional[float] = None
     cpu_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
     ram_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
+    gpu_temp_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
     last_seen_ts: float = 0.0
 
 
@@ -315,6 +343,7 @@ class DataStore:
         cpu_temp = extract_cpu_temp(temps)
         disk_temp = extract_disk_temp(temps)
         gpu_temps = tuple(extract_gpu_temps(payload))
+        gpu_temp_peak = extract_primary_gpu_temp(gpu_temps)
         net_up, net_down = extract_network_rates(payload.get("network_io"))
         disk_read, disk_write = extract_disk_rates(payload.get("disk_io"))
         now = time.time()
@@ -337,6 +366,7 @@ class DataStore:
             state.last_seen_ts = now
             state.cpu_hist.append(cpu_percent)
             state.ram_hist.append(ram_percent)
+            state.gpu_temp_hist.append(gpu_temp_peak if gpu_temp_peak is not None else 0.0)
 
             while len(self._devices) > MAX_TRACKED_DEVICES:
                 self._devices.popitem(last=False)
@@ -376,6 +406,7 @@ class DataStore:
                     disk_temp_c=state.disk_temp_c,
                     cpu_hist=tuple(state.cpu_hist),
                     ram_hist=tuple(state.ram_hist),
+                    gpu_temp_hist=tuple(state.gpu_temp_hist),
                     last_seen_ts=state.last_seen_ts,
                 )
                 for state in self._devices.values()
@@ -420,13 +451,22 @@ def draw_sparkline(
     rect: pygame.Rect,
     phase: float = 0.0,
 ) -> None:
-    """Draw sparkline with lightweight animation in rect."""
+    """Draw sparkline as a smooth area chart."""
     data = list(values)
     if len(data) < 2 or rect.width <= 2 or rect.height <= 2:
         return
-    pygame.draw.rect(surface, (26, 35, 53), rect, border_radius=4)
+    
+    # Background
+    pygame.draw.rect(surface, (20, 28, 45), rect, border_radius=4)
+    
+    # Faint horizontal grid lines
+    grid_color = (36, 48, 70)
+    for pct in (0.25, 0.5, 0.75):
+        y = rect.y + int(rect.height * pct)
+        pygame.draw.line(surface, grid_color, (rect.x, y), (rect.right, y))
+
     max_val = 100.0
-    step_x = rect.width / (len(data) - 1)
+    step_x = rect.width / max(1, len(data) - 1)
     points: List[Tuple[float, float]] = []
     for idx, val in enumerate(data):
         clamped = max(0.0, min(max_val, float(val)))
@@ -434,17 +474,80 @@ def draw_sparkline(
         py = rect.y + rect.height - (clamped / max_val * rect.height)
         points.append((px, py))
 
-    fill_points = [(rect.x, rect.bottom - 1), *points, (rect.right - 1, rect.bottom - 1)]
-    pygame.draw.polygon(surface, scale_color(color, 0.25), fill_points)
-    pygame.draw.lines(surface, color, False, points, 2)
+    # Filled Area
+    fill_points = [(rect.x, rect.bottom), *points, (rect.right, rect.bottom)]
+    if len(fill_points) > 2:
+        pygame.draw.polygon(surface, scale_color(color, 0.25), fill_points)
+        
+    # Antialiased curve
+    if len(points) >= 2:
+        pygame.draw.aalines(surface, color, False, points)
 
+    # Pulse 
     pulse_radius = 2 + int((math.sin(phase * math.tau) + 1.0) * 1.5)
     last_x, last_y = points[-1]
     pygame.draw.circle(surface, scale_color(color, 1.2), (int(last_x), int(last_y)), pulse_radius)
 
     sweep_ratio = phase % 1.0
     sweep_x = rect.x + int(sweep_ratio * max(1, rect.width - 1))
-    pygame.draw.line(surface, scale_color(color, 1.1), (sweep_x, rect.y + 1), (sweep_x, rect.bottom - 2), 1)
+    pygame.draw.line(surface, scale_color(color, 1.1), (sweep_x, rect.y + 1), (sweep_x, rect.bottom - 1), 1)
+
+
+def draw_arc_gauge(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    label: str,
+    value_text: str,
+    percent: float,
+    color: Tuple[int, int, int],
+    font: pygame.font.Font,
+    font_small: pygame.font.Font,
+    thickness: int = 6,
+    missing: bool = False,
+) -> None:
+    """Draw circular arc gauge (supersampling for antialiasing thick rings)."""
+    if rect.width <= 4 or rect.height <= 4:
+        return
+
+    center = rect.center
+    radius = min(rect.width, rect.height) // 2 - thickness // 2
+    bg_color = C_DIM if missing else (32, 45, 66)
+    
+    # Base circle
+    pygame.draw.circle(surface, bg_color, center, radius, thickness)
+    
+    if not missing and percent > 0:
+        ratio = max(0.0, min(1.0, percent / 100.0))
+        angle = ratio * 2 * math.pi
+        start_angle = math.pi / 2 - angle
+        
+        steps = max(10, int(angle * 12))
+        if steps > 0:
+            # Draw adjacent antialiased lines for thickness
+            for off in range(-thickness//2, thickness//2 + 1):
+                points = []
+                r = radius + off
+                if r <= 0: continue
+                for i in range(steps + 1):
+                    theta = start_angle + i * (angle / steps)
+                    x = center[0] + r * math.cos(theta)
+                    y = center[1] - r * math.sin(theta)
+                    points.append((x, y))
+                if len(points) > 1:
+                    pygame.draw.aalines(surface, scale_color(color, 1.1), False, points)
+
+    text_color = C_DIM if missing else C_TEXT
+    val_sur = font.render(value_text, True, text_color)
+    lbl_sur = font_small.render(label, True, text_color)
+    
+    val_y = center[1] - val_sur.get_height() // 2 - 2
+    lbl_y = center[1] + val_sur.get_height() // 2 - 2
+    
+    if val_sur.get_height() + lbl_sur.get_height() > rect.height * 0.95:
+        surface.blit(val_sur, (center[0] - val_sur.get_width() // 2, center[1] - val_sur.get_height() // 2))
+    else:
+        surface.blit(val_sur, (center[0] - val_sur.get_width() // 2, val_y))
+        surface.blit(lbl_sur, (center[0] - lbl_sur.get_width() // 2, lbl_y))
 
 
 def get_video_driver_candidates() -> List[Optional[str]]:
@@ -555,9 +658,8 @@ def main() -> None:
     font_title = pygame.font.SysFont("dejavusansmono", 22, bold=True)
     font_main = pygame.font.SysFont("dejavusansmono", 18)
     font_small = pygame.font.SysFont("dejavusansmono", 14)
-    font_footer_main = pygame.font.SysFont("dejavusansmono", 18, bold=True)
-    font_footer_meta = pygame.font.SysFont("dejavusansmono", 14)
-    font_cache_key: Optional[Tuple[int, int, int, int, int, int]] = None
+    font_footer = pygame.font.SysFont("dejavusansmono", 20, bold=True)
+    font_cache_key: Optional[Tuple[int, int, int, int, int]] = None
 
     store = DataStore()
     mqtt_client = connect_mqtt(store)
@@ -619,21 +721,19 @@ def main() -> None:
         last_store_version = version
 
         width, height = backbuffer.get_size()
-        title_size = clamp_int(height // 14, 26, 40)
-        main_size = clamp_int(height // 21, 20, 28)
-        small_size = clamp_int(height // 26, 17, 22)
-        top_size = clamp_int(height // 22, 17, 28)
-        footer_main_size = clamp_int(int(main_size * 0.95), 19, 30)
-        footer_meta_size = clamp_int(int(small_size * 0.9), 15, 20)
+        title_size = clamp_int(height // 13, 28, 42)
+        main_size = clamp_int(height // 20, 22, 30)
+        small_size = clamp_int(height // 22, 20, 30)
+        top_size = clamp_int(height // 21, 18, 30)
+        footer_size = small_size  # 資訊文字size 和 底部bar 一樣
 
-        current_font_key = (top_size, title_size, main_size, small_size, footer_main_size, footer_meta_size)
+        current_font_key = (top_size, title_size, main_size, small_size, footer_size)
         if current_font_key != font_cache_key:
             font_top = pygame.font.SysFont("dejavusansmono", top_size, bold=True)
             font_title = pygame.font.SysFont("dejavusansmono", title_size, bold=True)
             font_main = pygame.font.SysFont("dejavusansmono", main_size)
             font_small = pygame.font.SysFont("dejavusansmono", small_size)
-            font_footer_main = pygame.font.SysFont("dejavusansmono", footer_main_size, bold=True)
-            font_footer_meta = pygame.font.SysFont("dejavusansmono", footer_meta_size)
+            font_footer = pygame.font.SysFont("dejavusansmono", footer_size, bold=True)
             font_cache_key = current_font_key
             redraw_top = True
             redraw_cards = True
@@ -641,7 +741,7 @@ def main() -> None:
 
         margin = max(8, width // 42)
         top_h = font_top.get_height() + 12
-        footer_h = font_footer_main.get_height() + font_footer_meta.get_height() + 12
+        footer_h = font_footer.get_height() + 10
         gap = max(6, height // 100)
         content_top = top_h + margin
         content_bottom = height - footer_h - margin
@@ -668,14 +768,14 @@ def main() -> None:
             left = f"HW Monitor ({len(devices)} host)"
             right = datetime.now().strftime("%H:%M:%S")
             page_text = f"{page_index + 1}/{page_count}"
-            left_max = max(20, width - margin * 3 - font_top.size(right)[0] - font_small.size(page_text)[0] - 40)
+            right_x = width - margin - font_top.size(right)[0]
+            page_x = right_x - font_small.size(page_text)[0] - margin * 2
+            
+            left_max = max(20, page_x - margin - 20)
             left = fit_text(font_top, left, left_max)
             backbuffer.blit(font_top.render(left, True, (0, 0, 0)), (margin, 6))
-            backbuffer.blit(
-                font_small.render(page_text, True, (0, 0, 0)),
-                (width // 2 - font_small.size(page_text)[0] // 2, top_h - font_small.get_height() - 2),
-            )
-            backbuffer.blit(font_top.render(right, True, (0, 0, 0)), (width - margin - font_top.size(right)[0], 6))
+            backbuffer.blit(font_small.render(page_text, True, (0, 0, 0)), (page_x, 6 + (font_top.get_height() - font_small.get_height()) // 2))
+            backbuffer.blit(font_top.render(right, True, (0, 0, 0)), (right_x, 6))
 
             progress_bg = pygame.Rect(margin, top_h - 4, max(4, width - margin * 2), 3)
             pygame.draw.rect(backbuffer, (18, 32, 51), progress_bg, border_radius=2)
@@ -714,81 +814,131 @@ def main() -> None:
                     dirty_rects.append(rect)
                     continue
 
+                # 3-Column Layout Calculations
+                col1_w = int(rect.width * 0.35)
+                col2_w = int(rect.width * 0.25)
+                col3_w = rect.width - col1_w - col2_w
+
+                # --- Left Column: Node Info & Stats ---
+                left_x = rect.x + 10
+                current_y = rect.y + 10
+                
                 title_color = C_CRIT if stale else C_TEXT
-                title = fit_text(font_title, dev.host, rect.width - 24 - 70)
-                backbuffer.blit(font_title.render(title, True, title_color), (rect.x + 10, rect.y + 8))
-                if stale:
-                    stale_txt = font_small.render("STALE", True, C_CRIT)
-                    backbuffer.blit(stale_txt, (rect.right - stale_txt.get_width() - 10, rect.y + 12))
+                title = fit_text(font_title, dev.host, col1_w - 6)
+                backbuffer.blit(font_title.render(title, True, title_color), (left_x, current_y))
+                current_y += font_title.get_height() + 6
+                
+                # Status
+                pygame.draw.circle(backbuffer, C_CRIT if stale else C_CPU, (left_x + 6, current_y + 6), 4)
+                status_txt = "STALE" if stale else "ACTIVE"
+                backbuffer.blit(font_small.render(status_txt, True, C_CRIT if stale else C_DIM), (left_x + 16, current_y))
+                current_y += font_small.get_height() + 10
 
-                y = rect.y + 12 + font_title.get_height() + 6
-                line_h = font_main.get_height() + max(3, font_main.get_height() // 5)
-                line_max = rect.width - 20
-                wide_mode = rect.width >= 240
+                # Data explicitly labeled (CPU, GPU, DSK, NET)
+                lbl_bg = (32, 45, 66)
+                lbl_fg = (160, 175, 200)
 
-                if wide_mode:
-                    cpu_text = f"CPU {dev.cpu_percent:3.0f}% {format_temp(dev.cpu_temp_c)}"
-                    ram_text = f"RAM {dev.ram_percent:3.0f}%"
-                    half_w = (rect.width - 24) // 2
-                    backbuffer.blit(font_main.render(fit_text(font_main, cpu_text, half_w), True, C_CPU), (rect.x + 10, y))
-                    backbuffer.blit(
-                        font_main.render(fit_text(font_main, ram_text, half_w), True, C_RAM),
-                        (rect.x + 14 + half_w, y),
-                    )
+                def draw_badge(cx: int, cy: int, label: str, val_text: str, val_color: Tuple[int, int, int], pad: int = 4) -> int:
+                    lbl_surf = font_small.render(label, True, lbl_fg)
+                    val_surf = font_small.render(val_text, True, val_color)
+                    bw = lbl_surf.get_width() + 4
+                    pygame.draw.rect(backbuffer, lbl_bg, (cx, cy, bw, font_small.get_height() + 2), border_radius=2)
+                    backbuffer.blit(lbl_surf, (cx + 2, cy + 1))
+                    backbuffer.blit(val_surf, (cx + bw + 2, cy + 1))
+                    return cx + bw + 2 + val_surf.get_width() + pad
+
+                # CPU & GPU Temp
+                bx = left_x
+                c_val = dev.cpu_temp_c
+                c_str = format_temp(c_val) if c_val is not None else "NA"
+                c_color = pick_temp_color(c_val) if c_val is not None else C_DIM
+                bx = draw_badge(bx, current_y, "CPU", c_str, c_color)
+
+                g_val = extract_primary_gpu_temp(dev.gpu_temps_c)
+                if g_val is not None:
+                    g_str = format_temp(g_val)
+                    g_w = font_small.size("GPU")[0] + 4 + font_small.size(g_str)[0] + 4
+                    if (bx - left_x + g_w) > col1_w + 10:
+                        bx = left_x
+                        current_y += font_small.get_height() + 4
+                    draw_badge(bx, current_y, "GPU", g_str, pick_temp_color(g_val))
+                
+                current_y += font_small.get_height() + 4
+
+                # Disk Temp
+                d_val = dev.disk_temp_c
+                if d_val is not None:
+                    draw_badge(left_x, current_y, "DSK", format_temp(d_val), pick_temp_color(d_val))
+                    current_y += font_small.get_height() + 4
+
+                # Network
+                n_up = f"↑{format_bytes_short(dev.net_up_bps)}"
+                n_dn = f"↓{format_bytes_short(dev.net_down_bps)}"
+                nx = draw_badge(left_x, current_y, "NET", n_up, C_WARN)
+                
+                dn_w = font_small.size(n_dn)[0]
+                if (nx - left_x + dn_w) <= col1_w + 15:
+                    backbuffer.blit(font_small.render(n_dn, True, C_CPU), (nx, current_y + 1))
                 else:
-                    line = f"C {dev.cpu_percent:3.0f}% {format_temp(dev.cpu_temp_c)}  R {dev.ram_percent:3.0f}%"
-                    backbuffer.blit(font_main.render(fit_text(font_main, line, line_max), True, C_CPU), (rect.x + 10, y))
+                    current_y += font_small.get_height() + 4
+                    backbuffer.blit(font_small.render(n_dn, True, C_CPU), (left_x + 30, current_y + 1))
 
-                y += line_h
-                line = f"NET ↑{format_bytes_short(dev.net_up_bps)} ↓{format_bytes_short(dev.net_down_bps)}"
-                backbuffer.blit(font_main.render(fit_text(font_main, line, line_max), True, C_RAM), (rect.x + 10, y))
+                # --- Middle Column: Circular Gauges ---
+                mid_x = rect.x + col1_w
+                gauge_size = min(col2_w - 6, (rect.height - 24) // 2)
+                gauge_size = max(30, gauge_size)
+                # Stack them vertically
+                cpu_g_rect = pygame.Rect(mid_x + (col2_w - gauge_size) // 2, rect.y + 8, gauge_size, gauge_size)
+                ram_g_rect = pygame.Rect(mid_x + (col2_w - gauge_size) // 2, cpu_g_rect.bottom + 6, gauge_size, gauge_size)
+                
+                c_cpu = pick_usage_color(dev.cpu_percent, C_CPU)
+                c_ram = pick_usage_color(dev.ram_percent, C_RAM)
+                
+                draw_arc_gauge(backbuffer, cpu_g_rect, "CPU", f"{dev.cpu_percent:2.0f}%", dev.cpu_percent, c_cpu, font_small, font_small, 6, False)
+                draw_arc_gauge(backbuffer, ram_g_rect, "RAM", f"{dev.ram_percent:2.0f}%", dev.ram_percent, c_ram, font_small, font_small, 6, False)
 
-                y += line_h
-                line = f"DSK ↑{format_bytes_short(dev.disk_read_bps)} ↓{format_bytes_short(dev.disk_write_bps)} T{format_temp(dev.disk_temp_c)}"
-                disk_color = pick_temp_color(dev.disk_temp_c)
-                backbuffer.blit(font_main.render(fit_text(font_main, line, line_max), True, disk_color), (rect.x + 10, y))
-
-                y += line_h
-                gpu = " ".join(format_temp(t) for t in dev.gpu_temps_c) if dev.gpu_temps_c else "NA"
-                age = int(max(0.0, now - dev.last_seen_ts))
-                line = f"GPU {gpu}  AGE {age}s"
-                backbuffer.blit(font_small.render(fit_text(font_small, line, line_max), True, C_DIM), (rect.x + 10, y))
-
-                spark_h = clamp_int(rect.height // 6, 16, 30)
-                spark_y = rect.bottom - spark_h - 10
-                spark_w = (rect.width - 26) // 2
-                cpu_spark_rect = pygame.Rect(rect.x + 10, spark_y, spark_w, spark_h)
-                ram_spark_rect = pygame.Rect(rect.x + 16 + spark_w, spark_y, spark_w, spark_h)
-
-                label_y = spark_y - font_small.get_height() - 2
-                if label_y > y:
-                    backbuffer.blit(font_small.render("CPU", True, C_CPU), (cpu_spark_rect.x, label_y))
-                    backbuffer.blit(font_small.render("RAM", True, C_RAM), (ram_spark_rect.x, label_y))
-
-                base_phase = (now * 0.55 + slot_index * 0.17) % 1.0
-                draw_sparkline(backbuffer, dev.cpu_hist, C_CPU, cpu_spark_rect, phase=base_phase)
-                draw_sparkline(backbuffer, dev.ram_hist, C_RAM, ram_spark_rect, phase=(base_phase + 0.36) % 1.0)
+                # --- Right Column: History Graph ---
+                right_x = mid_x + col2_w
+                chart_w = col3_w - 12
+                chart_h = max(20, rect.height - 20)
+                
+                # Split chart into CPU and GPU/RAM depending on space
+                spark1 = pygame.Rect(right_x, rect.y + 10, chart_w, chart_h // 2 - 4)
+                spark2 = pygame.Rect(right_x, spark1.bottom + 8, chart_w, chart_h // 2 - 4)
+                
+                if chart_h >= 24:
+                    draw_sparkline(backbuffer, dev.cpu_hist, c_cpu, spark1, phase=(now * 0.55 + slot_index * 0.17) % 1.0)
+                    draw_sparkline(backbuffer, dev.gpu_temp_hist, C_GPU, spark2, phase=(now * 0.55 + slot_index * 0.17 + 0.36) % 1.0)
+                
                 dirty_rects.append(rect)
 
         if redraw_footer:
-            pygame.draw.rect(backbuffer, C_ACCENT_DARK, footer_rect)
+            pygame.draw.rect(backbuffer, (12, 18, 30), footer_rect)
+            
+            # Block 1: Host System Stats
             host_cpu = psutil.cpu_percent(interval=0)
             host_ram = psutil.virtual_memory().percent
-            host_temp = get_host_temp()
-            footer_main = f"RPI C{host_cpu:2.0f}% R{host_ram:2.0f}% T{format_temp(host_temp)}"
-            footer_meta = f"MQTT {len(devices)}  DRV {driver_name}"
-            footer_main = fit_text(font_footer_main, footer_main, width - margin * 2 - 14)
-            footer_meta = fit_text(font_footer_meta, footer_meta, width - margin * 2 - 14)
+            host_temp = format_temp(get_host_temp())
+            h_str = f" SYS C:{host_cpu:2.0f}% R:{host_ram:2.0f}% T:{host_temp} "
+            h_txt = font_footer.render(h_str, True, C_TEXT)
+            b1_bg = pygame.Rect(margin, footer_rect.y + 4, h_txt.get_width() + 8, footer_h - 8)
+            pygame.draw.rect(backbuffer, C_CARD, b1_bg, border_radius=4)
+            backbuffer.blit(h_txt, (b1_bg.x + 4, b1_bg.y + (b1_bg.height - h_txt.get_height()) // 2))
 
-            main_y = footer_rect.y + 2
-            meta_y = main_y + font_footer_main.get_height() + 1
-            backbuffer.blit(font_footer_main.render(footer_main, True, C_TEXT), (margin, main_y))
-            backbuffer.blit(font_footer_meta.render(footer_meta, True, C_TEXT), (margin, meta_y))
+            # Block 2: MQTT Status
+            m_str = f" MQTT:{len(devices)} "
+            m_txt = font_footer.render(m_str, True, C_BG)
+            b2_bg = pygame.Rect(b1_bg.right + 8, footer_rect.y + 4, m_txt.get_width() + 8, footer_h - 8)
+            mqtt_color = C_CPU if len(devices) > 0 else (100, 110, 120)
+            pygame.draw.rect(backbuffer, mqtt_color, b2_bg, border_radius=4)
+            backbuffer.blit(m_txt, (b2_bg.x + 4, b2_bg.y + (b2_bg.height - m_txt.get_height()) // 2))
 
+            # Heartbeat Pulse
             pulse_color = C_CPU if int(now * 2) % 2 == 0 else C_ACCENT
             dot_x = footer_rect.right - margin - 5
             dot_y = footer_rect.y + footer_h // 2
             pygame.draw.circle(backbuffer, pulse_color, (dot_x, dot_y), 4)
+            
             dirty_rects.append(footer_rect)
 
         if dirty_rects:
