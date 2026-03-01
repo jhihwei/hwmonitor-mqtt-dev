@@ -135,6 +135,25 @@ def extract_gpu_temps(payload: Dict[str, Any]) -> List[float]:
     return temps[:2]
 
 
+def extract_gpu_percent(payload: Dict[str, Any]) -> float:
+    """Extract max GPU percent from payload."""
+    gpus = payload.get("gpus")
+    if not gpus:
+        gpu_item = payload.get("gpu")
+        gpus = gpu_item if isinstance(gpu_item, list) else ([gpu_item] if isinstance(gpu_item, dict) else [])
+    
+    loads = []
+    for item in gpus:
+        if not isinstance(item, dict):
+            continue
+        for key in ("load_percent", "percent", "utilization", "gpu_percent"):
+            val = item.get(key)
+            if isinstance(val, (int, float)):
+                loads.append(float(val))
+                break
+    return max(loads) if loads else 0.0
+
+
 def extract_cpu_temp(temps_block: Optional[Dict[str, Any]]) -> Optional[float]:
     """Extract CPU temperature from temperature block."""
     if not temps_block:
@@ -290,6 +309,7 @@ class DeviceView:
     host: str
     cpu_percent: float
     ram_percent: float
+    gpu_percent: float
     cpu_temp_c: Optional[float]
     gpu_temps_c: Tuple[float, ...]
     net_up_bps: float
@@ -310,6 +330,7 @@ class DeviceState:
     host: str
     cpu_percent: float = 0.0
     ram_percent: float = 0.0
+    gpu_percent: float = 0.0
     cpu_temp_c: Optional[float] = None
     gpu_temps_c: Tuple[float, ...] = ()
     net_up_bps: float = 0.0
@@ -344,6 +365,7 @@ class DataStore:
         disk_temp = extract_disk_temp(temps)
         gpu_temps = tuple(extract_gpu_temps(payload))
         gpu_temp_peak = extract_primary_gpu_temp(gpu_temps)
+        gpu_percent = extract_gpu_percent(payload)
         net_up, net_down = extract_network_rates(payload.get("network_io"))
         disk_read, disk_write = extract_disk_rates(payload.get("disk_io"))
         now = time.time()
@@ -356,6 +378,7 @@ class DataStore:
 
             state.cpu_percent = cpu_percent
             state.ram_percent = ram_percent
+            state.gpu_percent = gpu_percent
             state.cpu_temp_c = cpu_temp
             state.gpu_temps_c = gpu_temps
             state.net_up_bps = net_up
@@ -397,6 +420,7 @@ class DataStore:
                     host=state.host,
                     cpu_percent=state.cpu_percent,
                     ram_percent=state.ram_percent,
+                    gpu_percent=state.gpu_percent,
                     cpu_temp_c=state.cpu_temp_c,
                     gpu_temps_c=state.gpu_temps_c,
                     net_up_bps=state.net_up_bps,
@@ -865,10 +889,22 @@ def main() -> None:
                 
                 current_y += font_small.get_height() + 4
 
-                # Disk Temp
+                # Disk Temp & IO
+                bx = left_x
                 d_val = dev.disk_temp_c
                 if d_val is not None:
-                    draw_badge(left_x, current_y, "DSK", format_temp(d_val), pick_temp_color(d_val))
+                    bx = draw_badge(bx, current_y, "DSK", format_temp(d_val), pick_temp_color(d_val))
+                else:
+                    bx = draw_badge(bx, current_y, "DSK", "NA", C_DIM)
+                
+                rw_str = f"R:{format_bytes_short(dev.disk_read_bps)} W:{format_bytes_short(dev.disk_write_bps)}"
+                rw_w = font_small.size(rw_str)[0] + 6
+                if (bx - left_x + rw_w) <= col1_w + 15:
+                    backbuffer.blit(font_small.render(rw_str, True, (120, 140, 180)), (bx, current_y + 1))
+                    current_y += font_small.get_height() + 4
+                else:
+                    current_y += font_small.get_height() + 4
+                    backbuffer.blit(font_small.render(rw_str, True, (120, 140, 180)), (left_x + 30, current_y + 1))
                     current_y += font_small.get_height() + 4
 
                 # Network
@@ -885,17 +921,27 @@ def main() -> None:
 
                 # --- Middle Column: Circular Gauges ---
                 mid_x = rect.x + col1_w
-                gauge_size = min(col2_w - 6, (rect.height - 24) // 2)
-                gauge_size = max(30, gauge_size)
-                # Stack them vertically
-                cpu_g_rect = pygame.Rect(mid_x + (col2_w - gauge_size) // 2, rect.y + 8, gauge_size, gauge_size)
-                ram_g_rect = pygame.Rect(mid_x + (col2_w - gauge_size) // 2, cpu_g_rect.bottom + 6, gauge_size, gauge_size)
+                
+                has_gpu = dev.gpu_percent > 0 or dev.gpu_temps_c
+                num_gauges = 3 if has_gpu else 2
+                gauge_size = min(col2_w - 6, max(30, (rect.height - 24) // num_gauges))
+                
+                total_h = num_gauges * gauge_size + (num_gauges - 1) * 4
+                start_y = rect.y + 10 + max(0, (rect.height - 20 - total_h) // 2)
+                
+                cpu_g_rect = pygame.Rect(mid_x + (col2_w - gauge_size) // 2, start_y, gauge_size, gauge_size)
+                ram_g_rect = pygame.Rect(mid_x + (col2_w - gauge_size) // 2, cpu_g_rect.bottom + 4, gauge_size, gauge_size)
                 
                 c_cpu = pick_usage_color(dev.cpu_percent, C_CPU)
                 c_ram = pick_usage_color(dev.ram_percent, C_RAM)
                 
                 draw_arc_gauge(backbuffer, cpu_g_rect, "CPU", f"{dev.cpu_percent:2.0f}%", dev.cpu_percent, c_cpu, font_small, font_small, 6, False)
                 draw_arc_gauge(backbuffer, ram_g_rect, "RAM", f"{dev.ram_percent:2.0f}%", dev.ram_percent, c_ram, font_small, font_small, 6, False)
+
+                if has_gpu:
+                    gpu_g_rect = pygame.Rect(mid_x + (col2_w - gauge_size) // 2, ram_g_rect.bottom + 4, gauge_size, gauge_size)
+                    c_gpu = pick_usage_color(dev.gpu_percent, C_GPU)
+                    draw_arc_gauge(backbuffer, gpu_g_rect, "GPU", f"{dev.gpu_percent:2.0f}%", dev.gpu_percent, c_gpu, font_small, font_small, 6, False)
 
                 # --- Right Column: History Graph ---
                 right_x = mid_x + col2_w
