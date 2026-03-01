@@ -154,7 +154,7 @@ def extract_gpu_percent(payload: Dict[str, Any]) -> float:
     for item in gpus:
         if not isinstance(item, dict):
             continue
-        for key in ("load_percent", "percent", "utilization", "gpu_percent"):
+        for key in ("load_percent", "percent", "utilization", "gpu_percent", "usage_percent"):
             val = item.get(key)
             if isinstance(val, (int, float)):
                 loads.append(float(val))
