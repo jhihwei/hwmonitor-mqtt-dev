@@ -427,6 +427,12 @@ class DataStore:
     def snapshot(self) -> Tuple[List[DeviceView], int]:
         """Return immutable snapshot + version."""
         with self._lock:
+            now = time.time()
+            stale_keys = [k for k, v in self._devices.items() if now - v.last_seen_ts > STALE_SECONDS]
+            for k in stale_keys:
+                del self._devices[k]
+                self._version += 1
+                
             views = [
                 DeviceView(
                     host=state.host,
@@ -863,16 +869,9 @@ def main() -> None:
                 left_x = rect.x + 10
                 current_y = rect.y + 10
                 
-                title_color = C_CRIT if stale else C_TEXT
                 title = fit_text(font_title, dev.host, col1_w - 6)
-                backbuffer.blit(font_title.render(title, True, title_color), (left_x, current_y))
-                current_y += font_title.get_height() + 6
-                
-                # Status
-                pygame.draw.circle(backbuffer, C_CRIT if stale else C_CPU, (left_x + 6, current_y + 6), 4)
-                status_txt = "STALE" if stale else "ACTIVE"
-                backbuffer.blit(font_small.render(status_txt, True, C_CRIT if stale else C_DIM), (left_x + 16, current_y))
-                current_y += font_small.get_height() + 10
+                backbuffer.blit(font_title.render(title, True, C_TEXT), (left_x, current_y))
+                current_y += font_title.get_height() + 10
 
                 # Data explicitly labeled (CPU, GPU, DSK, NET)
                 lbl_bg = (32, 45, 66)
