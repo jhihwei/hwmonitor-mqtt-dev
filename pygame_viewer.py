@@ -73,15 +73,19 @@ def format_bytes_short(byte_count: float) -> str:
     return f"{value:.1f}{units[idx]}"
 
 
-def pick_temp_color(temp_c: Optional[float]) -> Tuple[int, int, int]:
-    """Pick warning color from temperature value."""
+def pick_temp_color(temp_c: Optional[float], base: Tuple[int, int, int] = C_TEXT) -> Tuple[int, int, int]:
+    """Pick warning color from temperature."""
     if temp_c is None:
         return C_DIM
-    if temp_c >= 80:
+    if temp_c >= 100:
+        return (255, 0, 0) # Extremely critical
+    if temp_c >= 90:
         return C_CRIT
-    if temp_c >= 70:
+    if temp_c >= 75:
         return C_WARN
-    return C_TEXT
+    if temp_c >= 60:
+        return (220, 180, 80) # Elevated Orange
+    return base
 
 
 def pick_usage_color(percent: float, base: Tuple[int, int, int]) -> Tuple[int, int, int]:
@@ -939,15 +943,15 @@ def main() -> None:
                 spark2 = pygame.Rect(right_x, spark1.bottom + 8, chart_w, chart_h // 2 - 4)
                 
                 if chart_h >= 24:
-                    c_color = pick_temp_color(dev.cpu_temp_c) if dev.cpu_temp_c else C_DIM
-                    draw_sparkline(backbuffer, dev.cpu_temp_hist, c_color, spark1, phase=(now * 0.55 + slot_index * 0.17) % 1.0)
-                    top_text = font_small.render(f"CPU {format_temp(dev.cpu_temp_c)}", True, (210, 220, 240))
+                    c_color = pick_temp_color(dev.cpu_temp_c, C_CPU) if dev.cpu_temp_c else C_DIM
+                    draw_sparkline(backbuffer, dev.cpu_temp_hist, c_color, spark1, max_val=110.0, phase=(now * 0.55 + slot_index * 0.17) % 1.0)
+                    top_text = font_small.render(f"CPU {format_temp(dev.cpu_temp_c)}", True, c_color)
                     backbuffer.blit(top_text, (spark1.x + 4, spark1.y + 2))
                     
                     g_val = extract_primary_gpu_temp(dev.gpu_temps_c)
-                    g_color = pick_temp_color(g_val) if g_val else C_DIM
-                    draw_sparkline(backbuffer, dev.gpu_temp_hist, g_color, spark2, phase=(now * 0.55 + slot_index * 0.17 + 0.36) % 1.0)
-                    bot_text = font_small.render(f"GPU {format_temp(g_val)}", True, (210, 220, 240))
+                    g_color = pick_temp_color(g_val, C_GPU) if g_val else C_DIM
+                    draw_sparkline(backbuffer, dev.gpu_temp_hist, g_color, spark2, max_val=110.0, phase=(now * 0.55 + slot_index * 0.17 + 0.36) % 1.0)
+                    bot_text = font_small.render(f"GPU {format_temp(g_val)}", True, g_color)
                     backbuffer.blit(bot_text, (spark2.x + 4, spark2.y + 2))
                 
                 dirty_rects.append(rect)
