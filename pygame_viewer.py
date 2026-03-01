@@ -90,10 +90,14 @@ def pick_temp_color(temp_c: Optional[float], base: Tuple[int, int, int] = C_TEXT
 
 def pick_usage_color(percent: float, base: Tuple[int, int, int]) -> Tuple[int, int, int]:
     """Pick warning color from usage percent."""
-    if percent >= 90.0:
+    if percent >= 95.0:
+        return (255, 0, 0)
+    if percent >= 85.0:
         return C_CRIT
-    if percent >= 80.0:
+    if percent >= 70.0:
         return C_WARN
+    if percent >= 50.0:
+        return (220, 180, 80)
     return base
 
 
@@ -569,7 +573,7 @@ def draw_arc_gauge(
                 if len(points) > 1:
                     pygame.draw.aalines(surface, scale_color(color, 1.1), False, points)
 
-    text_color = C_DIM if missing else C_TEXT
+    text_color = C_DIM if missing else color
     val_sur = font.render(value_text, True, text_color)
     lbl_sur = font_small.render(label, True, text_color)
     
