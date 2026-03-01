@@ -328,7 +328,7 @@ class DeviceView:
     cpu_hist: Tuple[float, ...]
     ram_hist: Tuple[float, ...]
     cpu_temp_hist: Tuple[float, ...]
-    gpu_temp_hist: Tuple[float, ...]
+    gpu_temp_hists: Tuple[Tuple[float, ...], ...]
     last_seen_ts: float
 
 
@@ -350,7 +350,7 @@ class DeviceState:
     cpu_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
     ram_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
     cpu_temp_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
-    gpu_temp_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
+    gpu_temp_hists: List[Deque[float]] = field(default_factory=lambda: [deque([0.0] * 30, maxlen=60), deque([0.0] * 30, maxlen=60)])
     last_seen_ts: float = 0.0
 
 
@@ -400,7 +400,8 @@ class DataStore:
             state.cpu_hist.append(cpu_percent)
             state.ram_hist.append(ram_percent)
             state.cpu_temp_hist.append(cpu_temp if cpu_temp is not None else 0.0)
-            state.gpu_temp_hist.append(gpu_temp_peak if gpu_temp_peak is not None else 0.0)
+            state.gpu_temp_hists[0].append(gpu_temps[0] if len(gpu_temps) > 0 else 0.0)
+            state.gpu_temp_hists[1].append(gpu_temps[1] if len(gpu_temps) > 1 else 0.0)
 
             while len(self._devices) > MAX_TRACKED_DEVICES:
                 self._devices.popitem(last=False)
@@ -442,7 +443,7 @@ class DataStore:
                     cpu_hist=tuple(state.cpu_hist),
                     ram_hist=tuple(state.ram_hist),
                     cpu_temp_hist=tuple(state.cpu_temp_hist),
-                    gpu_temp_hist=tuple(state.gpu_temp_hist),
+                    gpu_temp_hists=tuple(tuple(dq) for dq in state.gpu_temp_hists),
                     last_seen_ts=state.last_seen_ts,
                 )
                 for state in self._devices.values()
@@ -487,6 +488,8 @@ def draw_sparkline(
     rect: pygame.Rect,
     max_val: float = 100.0,
     phase: float = 0.0,
+    draw_bg: bool = True,
+    draw_fill: bool = True,
 ) -> None:
     """Draw sparkline as a smooth area chart."""
     data = list(values)
@@ -494,13 +497,13 @@ def draw_sparkline(
         return
     
     # Background
-    pygame.draw.rect(surface, (20, 28, 45), rect, border_radius=4)
-    
-    # Faint horizontal grid lines
-    grid_color = (36, 48, 70)
-    for pct in (0.25, 0.5, 0.75):
-        y = rect.y + int(rect.height * pct)
-        pygame.draw.line(surface, grid_color, (rect.x, y), (rect.right, y))
+    if draw_bg:
+        pygame.draw.rect(surface, (20, 28, 45), rect, border_radius=4)
+        # Faint horizontal grid lines
+        grid_color = (36, 48, 70)
+        for pct in (0.25, 0.5, 0.75):
+            y = rect.y + int(rect.height * pct)
+            pygame.draw.line(surface, grid_color, (rect.x, y), (rect.right, y))
 
     max_val = float(max_val)
     step_x = rect.width / max(1, len(data) - 1)
@@ -513,7 +516,7 @@ def draw_sparkline(
 
     # Filled Area
     fill_points = [(rect.x, rect.bottom), *points, (rect.right, rect.bottom)]
-    if len(fill_points) > 2:
+    if draw_fill and len(fill_points) > 2:
         pygame.draw.polygon(surface, scale_color(color, 0.25), fill_points)
         
     # Antialiased curve
@@ -953,11 +956,32 @@ def main() -> None:
                     top_text = font_small.render(f"CPU {format_temp(dev.cpu_temp_c)}", True, c_color)
                     backbuffer.blit(top_text, (spark1.x + 4, spark1.y + 2))
                     
-                    g_val = extract_primary_gpu_temp(dev.gpu_temps_c)
-                    g_color = pick_temp_color(g_val, C_GPU) if g_val else C_DIM
-                    draw_sparkline(backbuffer, dev.gpu_temp_hist, g_color, spark2, max_val=110.0, phase=(now * 0.55 + slot_index * 0.17 + 0.36) % 1.0)
-                    bot_text = font_small.render(f"GPU {format_temp(g_val)}", True, g_color)
-                    backbuffer.blit(bot_text, (spark2.x + 4, spark2.y + 2))
+                    if not dev.gpu_temps_c:
+                        draw_sparkline(backbuffer, dev.gpu_temp_hists[0], C_DIM, spark2, max_val=110.0)
+                        bot_text = font_small.render("GPU NA", True, C_DIM)
+                        backbuffer.blit(bot_text, (spark2.x + 4, spark2.y + 2))
+                    else:
+                        bot_y = spark2.y + 2
+                        for i, g_val in enumerate(dev.gpu_temps_c):
+                            if i >= 2: break
+                            is_first = (i == 0)
+                            base_color = C_GPU if i == 0 else (200, 120, 220)
+                            g_color = pick_temp_color(g_val, base_color)
+                            
+                            draw_sparkline(
+                                backbuffer, 
+                                dev.gpu_temp_hists[i], 
+                                g_color, 
+                                spark2, 
+                                max_val=110.0, 
+                                phase=(now * 0.55 + slot_index * 0.17 + 0.36 + i * 0.5) % 1.0,
+                                draw_bg=is_first,
+                                draw_fill=is_first
+                            )
+                            label_name = f"GPU{i}" if len(dev.gpu_temps_c) > 1 else "GPU"
+                            bot_text = font_small.render(f"{label_name} {format_temp(g_val)}", True, g_color)
+                            backbuffer.blit(bot_text, (spark2.x + 4, bot_y))
+                            bot_y += font_small.get_height() + 2
                 
                 dirty_rects.append(rect)
 
