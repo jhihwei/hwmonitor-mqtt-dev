@@ -319,6 +319,7 @@ class DeviceView:
     disk_temp_c: Optional[float]
     cpu_hist: Tuple[float, ...]
     ram_hist: Tuple[float, ...]
+    cpu_temp_hist: Tuple[float, ...]
     gpu_temp_hist: Tuple[float, ...]
     last_seen_ts: float
 
@@ -340,6 +341,7 @@ class DeviceState:
     disk_temp_c: Optional[float] = None
     cpu_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
     ram_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
+    cpu_temp_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
     gpu_temp_hist: Deque[float] = field(default_factory=lambda: deque([0.0] * 30, maxlen=60))
     last_seen_ts: float = 0.0
 
@@ -389,6 +391,7 @@ class DataStore:
             state.last_seen_ts = now
             state.cpu_hist.append(cpu_percent)
             state.ram_hist.append(ram_percent)
+            state.cpu_temp_hist.append(cpu_temp if cpu_temp is not None else 0.0)
             state.gpu_temp_hist.append(gpu_temp_peak if gpu_temp_peak is not None else 0.0)
 
             while len(self._devices) > MAX_TRACKED_DEVICES:
@@ -430,6 +433,7 @@ class DataStore:
                     disk_temp_c=state.disk_temp_c,
                     cpu_hist=tuple(state.cpu_hist),
                     ram_hist=tuple(state.ram_hist),
+                    cpu_temp_hist=tuple(state.cpu_temp_hist),
                     gpu_temp_hist=tuple(state.gpu_temp_hist),
                     last_seen_ts=state.last_seen_ts,
                 )
@@ -871,24 +875,6 @@ def main() -> None:
                     backbuffer.blit(val_surf, (cx + bw + 2, cy + 1))
                     return cx + bw + 2 + val_surf.get_width() + pad
 
-                # CPU & GPU Temp
-                bx = left_x
-                c_val = dev.cpu_temp_c
-                c_str = format_temp(c_val) if c_val is not None else "NA"
-                c_color = pick_temp_color(c_val) if c_val is not None else C_DIM
-                bx = draw_badge(bx, current_y, "CPU", c_str, c_color)
-
-                g_val = extract_primary_gpu_temp(dev.gpu_temps_c)
-                if g_val is not None:
-                    g_str = format_temp(g_val)
-                    g_w = font_small.size("GPU")[0] + 4 + font_small.size(g_str)[0] + 4
-                    if (bx - left_x + g_w) > col1_w + 10:
-                        bx = left_x
-                        current_y += font_small.get_height() + 4
-                    draw_badge(bx, current_y, "GPU", g_str, pick_temp_color(g_val))
-                
-                current_y += font_small.get_height() + 4
-
                 # Disk Temp & IO
                 bx = left_x
                 d_val = dev.disk_temp_c
@@ -953,11 +939,16 @@ def main() -> None:
                 spark2 = pygame.Rect(right_x, spark1.bottom + 8, chart_w, chart_h // 2 - 4)
                 
                 if chart_h >= 24:
-                    draw_sparkline(backbuffer, dev.cpu_hist, c_cpu, spark1, phase=(now * 0.55 + slot_index * 0.17) % 1.0)
-                    backbuffer.blit(font_small.render("CPU %", True, (100, 115, 135)), (spark1.x + 4, spark1.y + 2))
+                    c_color = pick_temp_color(dev.cpu_temp_c) if dev.cpu_temp_c else C_DIM
+                    draw_sparkline(backbuffer, dev.cpu_temp_hist, c_color, spark1, phase=(now * 0.55 + slot_index * 0.17) % 1.0)
+                    top_text = font_small.render(f"CPU {format_temp(dev.cpu_temp_c)}", True, (210, 220, 240))
+                    backbuffer.blit(top_text, (spark1.x + 4, spark1.y + 2))
                     
-                    draw_sparkline(backbuffer, dev.gpu_temp_hist, C_GPU, spark2, phase=(now * 0.55 + slot_index * 0.17 + 0.36) % 1.0)
-                    backbuffer.blit(font_small.render("GPU °C", True, (100, 115, 135)), (spark2.x + 4, spark2.y + 2))
+                    g_val = extract_primary_gpu_temp(dev.gpu_temps_c)
+                    g_color = pick_temp_color(g_val) if g_val else C_DIM
+                    draw_sparkline(backbuffer, dev.gpu_temp_hist, g_color, spark2, phase=(now * 0.55 + slot_index * 0.17 + 0.36) % 1.0)
+                    bot_text = font_small.render(f"GPU {format_temp(g_val)}", True, (210, 220, 240))
+                    backbuffer.blit(bot_text, (spark2.x + 4, spark2.y + 2))
                 
                 dirty_rects.append(rect)
 
