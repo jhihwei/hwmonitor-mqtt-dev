@@ -481,6 +481,7 @@ def draw_sparkline(
     values: Iterable[float],
     color: Tuple[int, int, int],
     rect: pygame.Rect,
+    max_val: float = 100.0,
     phase: float = 0.0,
 ) -> None:
     """Draw sparkline as a smooth area chart."""
@@ -497,7 +498,7 @@ def draw_sparkline(
         y = rect.y + int(rect.height * pct)
         pygame.draw.line(surface, grid_color, (rect.x, y), (rect.right, y))
 
-    max_val = 100.0
+    max_val = float(max_val)
     step_x = rect.width / max(1, len(data) - 1)
     points: List[Tuple[float, float]] = []
     for idx, val in enumerate(data):
