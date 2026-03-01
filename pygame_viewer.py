@@ -954,7 +954,10 @@ def main() -> None:
                 
                 if chart_h >= 24:
                     draw_sparkline(backbuffer, dev.cpu_hist, c_cpu, spark1, phase=(now * 0.55 + slot_index * 0.17) % 1.0)
+                    backbuffer.blit(font_small.render("CPU %", True, (100, 115, 135)), (spark1.x + 4, spark1.y + 2))
+                    
                     draw_sparkline(backbuffer, dev.gpu_temp_hist, C_GPU, spark2, phase=(now * 0.55 + slot_index * 0.17 + 0.36) % 1.0)
+                    backbuffer.blit(font_small.render("GPU °C", True, (100, 115, 135)), (spark2.x + 4, spark2.y + 2))
                 
                 dirty_rects.append(rect)
 
